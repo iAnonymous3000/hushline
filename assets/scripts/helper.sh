@@ -17,7 +17,7 @@ cat <<"EOF"
  __                            __                
 |__)  _  _  _  _   _   _  |   (_   _  _     _  _ 
 |    (- |  _) (_) | ) (_| |   __) (- |  \/ (- |  
-                                                 
+v0.1a                                                 
                                                
 🤫 A self-hosted, anonymous tip line. Learn more at hushline.app
 EOF
