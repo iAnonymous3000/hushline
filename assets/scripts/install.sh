@@ -21,11 +21,35 @@ check_internet_connection() {
     done
 }
 
-check_internet_connection
+MAX_RETRIES=10
+DELAY=60 # delay in seconds
 
-# Update and upgrade non-interactively
-export DEBIAN_FRONTEND=noninteractive
-apt update && apt -y dist-upgrade -o Dpkg::Options::="--force-confnew" && apt -y autoremove
+retry_count=0
+while true; do
+    # Run the update commands
+    # Update and upgrade non-interactively
+    export DEBIAN_FRONTEND=noninteractive
+    apt update && apt -y dist-upgrade -o Dpkg::Options::="--force-confnew" && apt -y autoremove
+    
+    # If the update commands were successful, exit the loop
+    if [ $? -eq 0 ]; then
+        echo "Update successful!"
+        break
+    else
+        retry_count=$((retry_count+1))
+        
+        # Check if max retries have been reached
+        if [ $retry_count -ge $MAX_RETRIES ]; then
+            echo "Max retries reached. Exiting."
+            exit 1
+        fi
+        
+        echo "Update failed. Retrying in $DELAY seconds..."
+        sleep $DELAY
+    fi
+done
+
+check_internet_connection
 
 # Install required packages
 apt -y install sudo wget curl git python3 python3-venv python3-pip nginx tor whiptail libnginx-mod-http-geoip geoip-database unattended-upgrades gunicorn libssl-dev net-tools jq fail2ban ufw
