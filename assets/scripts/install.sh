@@ -21,7 +21,7 @@ check_internet_connection() {
     done
 }
 
-MAX_RETRIES=10
+MAX_RETRIES=60
 DELAY=60 # delay in seconds
 
 retry_count=0
