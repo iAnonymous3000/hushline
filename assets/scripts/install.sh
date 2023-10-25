@@ -33,7 +33,7 @@ while true; do
     
     # If the update commands were successful, exit the loop
     if [ $? -eq 0 ]; then
-        echo "Update successful!"
+        echo "👍 Update successful!"
         break
     else
         retry_count=$((retry_count+1))
@@ -44,7 +44,7 @@ while true; do
             exit 1
         fi
         
-        echo "Update failed. Retrying in $DELAY seconds..."
+        echo "👎 Update failed. Retrying in $DELAY seconds..."
         sleep $DELAY
     fi
 done
