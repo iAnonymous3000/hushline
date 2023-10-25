@@ -14,7 +14,7 @@ Flash a microSD card with Raspberry Pi OS Legacy 64-bit. In the advanced setting
 - Set a strong password
 - Do not configure wifi
 
-## Step 2: Fire
+## Step 2: Take aim
 
 Log in to the device and run:
 
@@ -25,6 +25,10 @@ curl --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/scidsg/hu
 Still need help? Check out our [documentation](https://scidsg.github.io/hushline-docs/book/intro.html) for more information.
 
 ![cover](https://github.com/scidsg/hushline/assets/28545431/31180813-f142-4f04-be23-4ffb04fc282c)
+
+## Step 3: Fire!
+
+Reboot your device and wait for the QR code to display on the e-paper screen, scan it, and fill out the setup form!
 
 ## Why Hush Line?
 
