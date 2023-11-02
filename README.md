@@ -1,6 +1,6 @@
 # 🤫 Personal Server - 0.1a
 
-The Hush Line Personal Server repository is for our forthcoming physical product, available in Q1 of 2024. 
+This repository is for specific prototype devices that are part of an invite-only pilot of our forthcoming physical product, available in Q1 of 2024. 
 
 ![IMG_7626](https://github.com/scidsg/hushline/assets/28545431/2d659f47-e59f-4061-9f72-ea4af06a68f2)
 
