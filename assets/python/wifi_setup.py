@@ -38,7 +38,7 @@ def setup_wifi():
 
 @app.route('/success')
 def success():
-    return render_template('wifi-success.html')
+    return render_template('success.html')
 
 def configure_wifi(ssid, password):
     # Example of how you might configure Wi-Fi on a Raspberry Pi
