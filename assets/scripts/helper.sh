@@ -18,7 +18,6 @@ cat <<"EOF"
 |__)  _  _  _  _   _   _  |   (_   _  _     _  _ 
 |    (- |  _) (_) | ) (_| |   __) (- |  \/ (- |  
                                                  
-                                               
 🤫 A self-hosted, anonymous tip line. Learn more at hushline.app
 EOF
 sleep 3
