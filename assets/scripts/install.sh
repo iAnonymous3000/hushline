@@ -6,19 +6,6 @@ if [[ $EUID -ne 0 ]]; then
   exec sudo /bin/bash "$0" "$@"
 fi
 
-# Function to start a temporary web server to get WiFi credentials
-wifi_setup() {
-    python3 /home/hush/hushline/assets/python/wifi_setup.py &
-}
-
-# Check if WiFi credentials are needed, i.e., if there's no internet connection yet
-if ! ping -c 1 hushline.app &>/dev/null; then
-    echo "No internet connection. Starting wifi setup."
-    start_temporary_web_server
-    # Wait until the internet connection is established or timeout
-    sleep 60
-fi
-
 # Check to see if internet connection is available before proceeding
 check_internet_connection() {
     while true; do
@@ -42,6 +29,7 @@ apt update && apt -y dist-upgrade -o Dpkg::Options::="--force-confnew" && apt -y
 
 # Install required packages
 apt -y install sudo wget curl git python3 python3-venv python3-pip nginx tor whiptail libnginx-mod-http-geoip geoip-database unattended-upgrades gunicorn libssl-dev net-tools jq fail2ban ufw
+
 
 # Function to kill process on a given port
 kill_process_on_port() {
