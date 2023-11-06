@@ -5,7 +5,7 @@ import os
 import secrets
 
 app = Flask(__name__)
-app.secret_key = os.environ.get('SECRET_KEY') or 'a default secret key'
+app.secret_key = os.environ.get('SECRET_KEY') or secrets.token_urlsafe(24)
 
 @app.route('/')
 def index():
@@ -15,14 +15,17 @@ def index():
 def setup_wifi():
     ssid = request.form['ssid']
     password = request.form['password']
+    error_msg = None
     
     # Validate the SSID and password
     if not ssid or not password:
-        flash('SSID and password are required!')
-        return redirect(url_for('index'))
-    if len(password) < 8:
-        flash('Password must be at least 8 characters long!')
-        return redirect(url_for('index'))
+        error_msg = 'SSID and password are required!'
+    elif len(password) < 8:
+        error_msg = 'Password must be at least 8 characters long!'
+
+    if error_msg:
+        # Pass the error message back to the template
+        return render_template('wifi-setup.html', error=error_msg)
 
     # Configure Wi-Fi with the validated credentials
     configure_wifi(ssid, password)
@@ -35,7 +38,7 @@ def setup_wifi():
 
 @app.route('/success')
 def success():
-    return "Wi-Fi setup was successful!"
+    return render_template('success.html')
 
 def configure_wifi(ssid, password):
     # Example of how you might configure Wi-Fi on a Raspberry Pi
