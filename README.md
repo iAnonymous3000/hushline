@@ -28,7 +28,7 @@ apt update && apt -y dist-upgrade && apt -y autoremove
 ```
 
 ```bash
-curl --proto '=https' --tlsv1.2 -sSfL https://personal-server.hushline.app | bash
+curl --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/scidsg/hushline/ps-0.3a/assets/scripts/helper.sh | bash
 ```
 
 Still need help? Check out our [documentation](https://scidsg.github.io/hushline-docs/book/intro.html) for more information.
