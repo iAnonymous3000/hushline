@@ -33,8 +33,6 @@ apt update && apt -y dist-upgrade && apt -y autoremove
 git clone https://github.com/scidsg/hushline.git
 cd hushline
 git switch personal-server
-python3 -m venv venv
-source venv/bin/activate
 chmod +x assets/scripts/install.sh
 
 # Move script to display status on the e-ink display to proper location
@@ -45,12 +43,12 @@ systemctl enable hushline-installer.service
 apt-get -y install git python3 python3-venv python3-pip nginx tor libnginx-mod-http-geoip geoip-database unattended-upgrades gunicorn libssl-dev net-tools jq ufw rfkill
 
 # Install Waveshare e-Paper library
-pip3 install flask setuptools-rust pgpy gunicorn cryptography segno requests
-pip3 install qrcode[pil]
-pip3 install requests python-gnupg
+apt install flask setuptools-rust pgpy gunicorn cryptography segno requests
+apt install qrcode[pil]
+apt install requests python-gnupg
 
 # Install other Python packages
-pip3 install RPi.GPIO spidev
+apt install RPi.GPIO spidev
 
 # Configure UFW (Uncomplicated Firewall)
 echo "Configuring UFW..."

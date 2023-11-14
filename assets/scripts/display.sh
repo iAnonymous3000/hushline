@@ -10,12 +10,12 @@ fi
 apt update && apt -y dist-upgrade && apt install -y python3-pip
 
 # Install Waveshare e-Paper library
-pip3 install /home/hush/hushline/e-Paper/RaspberryPi_JetsonNano/python/
-pip3 install qrcode[pil]
-pip3 install requests python-gnupg
+apt install /home/hush/hushline/e-Paper/RaspberryPi_JetsonNano/python/
+apt install qrcode[pil]
+apt install requests python-gnupg
 
 # Install other Python packages
-pip3 install RPi.GPIO spidev
+apt install RPi.GPIO spidev
 apt -y autoremove
 
 # Create a new script to display status on the e-ink display
