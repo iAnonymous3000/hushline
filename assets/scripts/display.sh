@@ -11,12 +11,19 @@ apt update && apt -y dist-upgrade && apt install -y python3-pip
 
 # Install Waveshare e-Paper library
 apt install /home/hush/hushline/e-Paper/RaspberryPi_JetsonNano/python/
-apt install qrcode[pil]
-apt install requests python-gnupg
 
 # Install other Python packages
-apt install RPi.GPIO spidev
 apt -y autoremove
+
+apt-get -y install git python3 python3-venv python3-pip nginx tor libnginx-mod-http-geoip geoip-database unattended-upgrades gunicorn libssl-dev net-tools jq ufw rfkill
+
+# Install Waveshare e-Paper library
+apt install -y python3-flask python3-setuptools-rust python3-pgpy python3-gunicorn python3-cryptography python3-segno python3-requests
+apt install -y python3-qrcode
+apt install -y python3-requests python3-gnupg python3-pil
+
+# Install other Python packages
+apt install -y python3-RPi.GPIO python3-spidev
 
 # Create a new script to display status on the e-ink display
 mv /home/hush/hushline/assets/python/display_status.py /home/hush/hushline
