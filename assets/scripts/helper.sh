@@ -78,11 +78,6 @@ echo "dtoverlay=disable-usb" | tee -a /boot/config.txt
 echo "🔒 USB access disabled."
 sleep 3
 
-deactivate
-
-# Disable the trap before exiting
-trap - ERR
-
 # Shutdown the system
 echo "Shutting down in 3 seconds..."
 sleep 3
