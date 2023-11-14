@@ -33,6 +33,8 @@ apt update && apt -y dist-upgrade && apt -y autoremove
 git clone https://github.com/scidsg/hushline.git
 cd hushline
 git switch personal-server
+python3 -m venv venv
+source venv/bin/activate
 chmod +x assets/scripts/install.sh
 
 # Move script to display status on the e-ink display to proper location
@@ -77,6 +79,11 @@ echo "Disabling USB access..."
 echo "dtoverlay=disable-usb" | tee -a /boot/config.txt
 echo "🔒 USB access disabled."
 sleep 3
+
+deactivate
+
+# Disable the trap before exiting
+trap - ERR
 
 # Shutdown the system
 echo "Shutting down in 3 seconds..."
