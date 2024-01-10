@@ -67,11 +67,10 @@
         {% if user.is_verified %}
             <p>⚠️ Changing your username will result in losing your verification status.</p>
         {% endif %}
-        <p class="meta">Current Username: {{ session['username'] }}</p>
         <form method="POST" action="{{ url_for('settings') }}">
             {{ change_username_form.hidden_tag() }}
-            <label for="new_username">{{ change_username_form.new_username.label }}</label>
-            {{ change_username_form.new_username(id='new_username') }}
+            <label for="new_username">Username</label>
+            {{ change_username_form.new_username(id='new_username', value=session['username']) }}
             {% if change_username_form.new_username.errors %}
                 {% for error in change_username_form.new_username.errors %}
                     <span class="error">{{ error }}</span>
