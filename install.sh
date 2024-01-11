@@ -33,8 +33,7 @@ trap error_exit ERR
 
 # Update packages and install whiptail
 export DEBIAN_FRONTEND=noninteractive
-apt update && apt -y dist-upgrade 
-apt install whiptail -y
+apt update && apt -y dist-upgrade && apt install -y whiptail 
 
 # Collect variables using whiptail
 DB_NAME=$(whiptail --inputbox "Enter the database name" 8 39 "hushlinedb" --title "Database Setup" 3>&1 1>&2 2>&3)
@@ -42,11 +41,11 @@ DB_USER=$(whiptail --inputbox "Enter the database username" 8 39 "hushlineuser" 
 DB_PASS=$(whiptail --passwordbox "Enter the database password" 8 39 "dbpassword" --title "Database Setup" 3>&1 1>&2 2>&3)
 
 # Install Python, pip, Git, Nginx, and MariaDB
-sudo apt install python3 python3-pip git nginx default-mysql-server python3-venv gnupg tor certbot python3-certbot-nginx libnginx-mod-http-geoip ufw fail2ban -y
+sudo apt install python3 python3-pip git nginx default-mysql-server python3-venv gnupg tor certbot python3-certbot-nginx libnginx-mod-http-geoip ufw fail2ban apt-transport-https lsb-release curl -y
 
-############################
-# Server, Nginx, HTTPS setup
-############################
+#################################
+# Server, Nginx, Tor, HTTPS setup
+#################################
 
 DOMAIN=$(whiptail --inputbox "Enter your domain name:" 8 60 "beta.hushline.app" 3>&1 1>&2 2>&3)
 EMAIL=$(whiptail --inputbox "Enter your email:" 8 60 "hushline@scidsg.org" 3>&1 1>&2 2>&3)
@@ -207,7 +206,7 @@ WIDTH=$(tput cols)
 whiptail --msgbox --title "Instructions" "\nPlease ensure that your DNS records are correctly set up before proceeding:\n\nAdd an A record with the name: @ and content: $SERVER_IP\n* Add a CNAME record with the name $SAUTEED_ONION_ADDRESS.$DOMAIN and content: $DOMAIN\n* Add a CAA record with the name: @ and content: 0 issue \"letsencrypt.org\"\n" 14 $WIDTH
 # Request the certificates
 echo "⏲️  Waiting 5 minutes for DNS to update..."
-sleep 300
+#sleep 300
 certbot --nginx -d $DOMAIN,$SAUTEED_ONION_ADDRESS.$DOMAIN --agree-tos --non-interactive --no-eff-email --email ${EMAIL}
 
 echo "Configuring automatic renewing certificates..."
@@ -216,9 +215,34 @@ echo "Configuring automatic renewing certificates..."
 echo "✅ Automatic HTTPS certificates configured."
 
 ####################################
+# I2P Setup
 ####################################
 
 cd $DOMAIN
+git switch i2p
+
+# Add the I2P repository
+echo "deb [signed-by=/usr/share/keyrings/i2p-archive-keyring.gpg] https://deb.i2p.net/ $(lsb_release -sc) main" | tee /etc/apt/sources.list.d/i2p.list
+curl -o i2p-archive-keyring.gpg https://geti2p.net/_static/i2p-archive-keyring.gpg
+cp i2p-archive-keyring.gpg /usr/share/keyrings
+
+# Update packages and install I2P
+apt update
+apt install -y i2p i2p-keyring
+
+# Copy the custom i2ptunnel.config to the I2P configuration directory
+cp /var/www/html/$DOMAIN/assets/i2ptunnel.config /var/lib/i2p/i2p-config/i2ptunnel.config
+
+# Ensure proper permissions and ownership (replace 'i2p' with the actual username if different)
+sudo chown i2psvc:i2psvc /var/lib/i2p/i2p-config/i2ptunnel.config
+chmod 644 /var/lib/i2p/i2p-config/i2ptunnel.config
+
+# Enable I2P to start automatically and restart the service
+dpkg-reconfigure i2p
+service i2p restart
+
+####################################
+####################################
 
 mkdir -p ~/.gnupg
 chmod 700 ~/.gnupg
