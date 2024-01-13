@@ -219,6 +219,7 @@ echo "✅ Automatic HTTPS certificates configured."
 ####################################
 
 cd $DOMAIN
+git switch custom-logo
 
 mkdir -p ~/.gnupg
 chmod 700 ~/.gnupg

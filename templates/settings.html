@@ -23,6 +23,22 @@
 
         </form>
 
+        <!-- Custom App Name Section in settings.html -->
+        <h3>Custom App Name</h3>
+        <form method="POST" action="{{ url_for('settings') }}">
+            {{ custom_app_name_form.hidden_tag() }}
+
+            <label for="app_name">{{ custom_app_name_form.app_name.label }}</label>
+            {{ custom_app_name_form.app_name(id='app_name') }}
+            {% if custom_app_name_form.app_name.errors %}
+                {% for error in custom_app_name_form.app_name.errors %}
+                    <span class="error">{{ error }}</span>
+                {% endfor %}
+            {% endif %}
+
+            <button type="submit" name="update_app_name">Update App Name</button>
+        </form>
+
         <!-- Two-Factor Authentication Section -->
         <h3>Two-Factor Authentication</h3>
         {% if user.totp_secret %}
