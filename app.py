@@ -653,16 +653,6 @@ def settings():
     smtp_settings_form = SMTPSettingsForm()
     pgp_key_form = PGPKeyForm()
     display_name_form = DisplayNameForm()
-    custom_app_name_form = CustomAppNameForm()
-
-    # Prepopulate fields
-    smtp_settings_form.email.data = user.email
-    smtp_settings_form.smtp_server.data = user.smtp_server
-    smtp_settings_form.smtp_port.data = user.smtp_port
-    smtp_settings_form.smtp_username.data = user.smtp_username
-    pgp_key_form.pgp_key.data = user.pgp_key
-    display_name_form.display_name.data = user.display_name or user.username
-    custom_app_name_form.app_name.data = user.custom_app_name
 
     # Handle form submissions
     if request.method == "POST":
@@ -674,6 +664,10 @@ def settings():
             user.update_display_name(display_name_form.display_name.data.strip())
             db.session.commit()
             flash("👍 Display name updated successfully.")
+            app.logger.debug(
+                f"Display name updated to {user.display_name}, Verification status: {user.is_verified}"
+            )
+            return redirect(url_for("settings"))
 
         # Handle Change Username Form Submission
         elif (
@@ -689,6 +683,10 @@ def settings():
                 db.session.commit()
                 session["username"] = new_username  # Update username in session
                 flash("👍 Username changed successfully.")
+                app.logger.debug(
+                    f"Username updated to {user.username}, Verification status: {user.is_verified}"
+                )
+            return redirect(url_for("settings"))
 
         # Handle SMTP Settings Form Submission
         elif smtp_settings_form.validate_on_submit():
@@ -699,12 +697,14 @@ def settings():
             user.smtp_password = smtp_settings_form.smtp_password.data
             db.session.commit()
             flash("👍 SMTP settings updated successfully.")
+            return redirect(url_for("settings"))
 
         # Handle PGP Key Form Submission
         elif pgp_key_form.validate_on_submit():
             user.pgp_key = pgp_key_form.pgp_key.data
             db.session.commit()
             flash("👍 PGP key updated successfully.")
+            return redirect(url_for("settings"))
 
         # Handle Change Password Form Submission
         elif change_password_form.validate_on_submit():
@@ -718,36 +718,24 @@ def settings():
                 flash("👍 Password changed successfully.")
             else:
                 flash("⛔️ Incorrect old password.")
+            return redirect(url_for("settings"))
 
-        # Handle Custom App Name Form Submission
-        elif (
-            "update_app_name" in request.form
-            and custom_app_name_form.validate_on_submit()
-        ):
-            user.custom_app_name = custom_app_name_form.app_name.data.strip()
-            db.session.commit()
-            flash("Custom app name updated successfully.", "success")
-
-        # Add any other form processing logic here if necessary
-
-    # Prepopulate form fields for next GET request
+    # Prepopulate form fields
     smtp_settings_form.email.data = user.email
     smtp_settings_form.smtp_server.data = user.smtp_server
     smtp_settings_form.smtp_port.data = user.smtp_port
     smtp_settings_form.smtp_username.data = user.smtp_username
     pgp_key_form.pgp_key.data = user.pgp_key
     display_name_form.display_name.data = user.display_name or user.username
-    custom_app_name_form.app_name.data = user.custom_app_name
 
     return render_template(
         "settings.html",
         user=user,
+        smtp_settings_form=smtp_settings_form,
         change_password_form=change_password_form,
         change_username_form=change_username_form,
-        smtp_settings_form=smtp_settings_form,
         pgp_key_form=pgp_key_form,
         display_name_form=display_name_form,
-        custom_app_name_form=custom_app_name_form,
     )
 
 
