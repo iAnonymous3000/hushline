@@ -144,7 +144,6 @@ class User(db.Model):
     _pgp_key = db.Column("pgp_key", db.Text)
     is_verified = db.Column(db.Boolean, default=False)
     is_admin = db.Column(db.Boolean, default=False)
-    custom_logo = db.Column(db.String(255))
 
     @property
     def password_hash(self):
@@ -326,10 +325,6 @@ class PGPKeyForm(FlaskForm):
 
 class DisplayNameForm(FlaskForm):
     display_name = StringField("Display Name", validators=[Length(max=100)])
-
-
-class CustomAppNameForm(FlaskForm):
-    app_name = StringField("Custom App Name", validators=[Length(max=80)])
 
 
 def require_2fa(f):

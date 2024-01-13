@@ -9,14 +9,8 @@
 </head>
 <body>
     <header>
-        {% if 'user_id' in session %}
-            {% set user = User.query.get(session['user_id']) %}
-            {% if user.custom_app_name %}
-                <h1>{{ user.custom_app_name }}</h1>
-            {% else %}
-                <h1>🤫 Hush Line</h1>
-            {% endif %}
-        {% endif %}
+        <!-- Navigation bar, logo, etc. -->
+        <h1>🤫 Hush Line</h1>
         {% if 'user_id' in session and 'username' in session %}
             <nav>
                 <a class="mobileNav btnIcon" aria-label="Navigation menu">Menu</a>
