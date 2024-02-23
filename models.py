@@ -1,5 +1,5 @@
-from flask_app.db import db  # Adjust the import path 
-from flask_app.crypto import encrypt_field, decrypt_field  # Adjust the import path
+from hushline.flask_app.db import db  # Adjust the import path 
+from hushline.crypto import encrypt_field, decrypt_field  # Adjust the import path
 
 class User(db.Model):
     __tablename__ = 'user'
@@ -32,7 +32,7 @@ class User(db.Model):
         self._password_hash = encrypt_field(password)
 
     def verify_password(self, plaintext_password):
-        return decrypt_field(self._password_hash) == plaintext_password
+        return self._password_hash == encrypt_field(plaintext_password)
 
     # Additional properties for encrypted fields as needed
 
