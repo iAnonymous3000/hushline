@@ -250,7 +250,7 @@ Contact: mailto:security@scidsg.org
 Expires: 2026-01-01T00:00:00Z
 Encryption: https://$DOMAIN/public.asc
 Acknowledgments: https://$DOMAIN/security_acknowledgments
-Policy: https://github.com/scidsg/hushline/blob/main/security-policy.md
+Policy: https://github.com/scidsg/hushline/blob/main/SECURITY.md
 Canonical: https://$DOMAIN/.well-known/security.txt
 EOL
 
@@ -309,6 +309,26 @@ echo -e "[Service]\nRestart=on-failure\nRestartSec=5s" | tee /etc/systemd/system
 # Reload the systemd daemon and restart MariaDB to apply changes
 systemctl daemon-reload
 systemctl restart mariadb
+
+sudo mkdir -p /etc/mariadb/ssl
+
+sudo cp /etc/letsencrypt/live/$DOMAIN/fullchain.pem /etc/mariadb/ssl/
+sudo cp /etc/letsencrypt/live/$DOMAIN/privkey.pem /etc/mariadb/ssl/
+
+sudo chown mysql:mysql /etc/mariadb/ssl/fullchain.pem /etc/mariadb/ssl/privkey.pem
+sudo chmod 400 /etc/mariadb/ssl/fullchain.pem /etc/mariadb/ssl/privkey.pem
+
+# MariaDB configuration file path
+MY_CNF="/etc/mysql/my.cnf"
+
+# Append SSL configuration to the MariaDB configuration file
+echo "ssl_cert=/etc/mariadb/ssl/fullchain.pem" | sudo tee -a $MY_CNF > /dev/null
+echo "ssl_key=/etc/mariadb/ssl/privkey.pem" | sudo tee -a $MY_CNF > /dev/null
+
+# Restart MariaDB to apply the new configuration
+sudo systemctl restart mariadb
+
+echo "✅ SSL configuration has been added to MariaDB."
 
 # Check if the database exists, create if not
 if ! mysql -sse "SELECT EXISTS(SELECT 1 FROM information_schema.schemata WHERE schema_name = '$DB_NAME')" | grep -q 1; then
@@ -422,10 +442,12 @@ chmod +x generate_codes.sh
 # Create a systemd override directory for the Tor service
 mkdir -p /etc/systemd/system/tor@default.service.d
 
-# Create an override file with an ExecStartPost command
+# Create an override file with an ExecStartPost command and restart on failure for the Tor service
 cat <<EOT > /etc/systemd/system/tor@default.service.d/override.conf
 [Service]
-ExecStartPost=/bin/sh -c 'while [ ! -S /var/www/html/$DOMAIN/hushline-hosted.sock ]; do sleep 1; done; chown debian-tor:www-data /var/www/html/$DOMAIN/hushline-hosted.sock'
+Restart=on-failure
+RestartSec=5s
+ExecStartPost=/bin/sh -c 'until [ -S /var/www/html/$DOMAIN/hushline-hosted.sock ]; do sleep 1; done; chown debian-tor:www-data /var/www/html/$DOMAIN/hushline-hosted.sock'
 EOT
 
 # Reload the systemd daemon to apply the override
