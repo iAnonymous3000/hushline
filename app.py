@@ -27,6 +27,10 @@ from flask_sqlalchemy import SQLAlchemy
 from flask_bcrypt import Bcrypt
 from flask_wtf import FlaskForm
 from flask_migrate import Migrate
+from flask_limiter import Limiter, RateLimitExceeded
+from flask_limiter.util import get_remote_address
+from redis.exceptions import ConnectionError as RedisConnectionError
+from werkzeug.middleware.proxy_fix import ProxyFix
 from werkzeug.security import generate_password_hash, check_password_hash, safe_join
 
 # Form Handling and Validation
@@ -83,6 +87,24 @@ def decrypt_field(data):
 
 
 app = Flask(__name__)
+
+# Init Flask Limiter
+limiter = Limiter(
+    app=app,
+    key_func=get_remote_address,
+    default_limits=["200 per day", "50 per hour"],
+    storage_uri="redis://localhost:6379",
+)
+
+
+# Handle Rate Limit Exceeded Error
+@app.errorhandler(RateLimitExceeded)
+def handle_rate_limit_exceeded(e):
+    return render_template("rate_limit_exceeded.html"), 429
+
+
+app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_port=1)
+
 app.config["SECRET_KEY"] = secret_key
 
 ssl_cert = "/etc/mariadb/ssl/fullchain.pem"
@@ -359,6 +381,10 @@ class RegistrationForm(FlaskForm):
     )
 
 
+# Load registration codes requirement setting from environment variable
+require_invite_code = os.getenv("REGISTRATION_CODES_REQUIRED", "True") == "True"
+
+
 class ChangePasswordForm(FlaskForm):
     old_password = PasswordField("Old Password", validators=[DataRequired()])
     new_password = PasswordField(
@@ -390,6 +416,12 @@ class PGPKeyForm(FlaskForm):
 
 class DisplayNameForm(FlaskForm):
     display_name = StringField("Display Name", validators=[Length(max=100)])
+
+
+@app.errorhandler(404)
+def page_not_found(e):
+    flash("⛓️‍💥 That page doesn't exist.", "warning")
+    return redirect(url_for("index"))
 
 
 def require_2fa(f):
@@ -426,6 +458,7 @@ def handle_exception(e):
 
 # Routes
 @app.route("/")
+@limiter.limit("120 per minute")
 def index():
     if "user_id" in session:
         user = User.query.get(session["user_id"])
@@ -441,21 +474,28 @@ def index():
 
 
 @app.route("/register", methods=["GET", "POST"])
+@limiter.limit("120 per minute")
 def register():
     form = RegistrationForm()
+    # Dynamically adjust form field based on invite code requirement
+    if not require_invite_code:
+        del form.invite_code  # Remove invite_code field if not required
 
     if form.validate_on_submit():
         username = form.username.data
         password = form.password.data
-        invite_code_input = form.invite_code.data
 
-        # Validate the invite code
-        invite_code = InviteCode.query.filter_by(code=invite_code_input).first()
-        if not invite_code or invite_code.expiration_date < datetime.utcnow():
-            flash("⛔️ Invalid or expired invite code.", "error")
-            return redirect(url_for("register"))
+        # Only process invite code if required
+        invite_code_input = form.invite_code.data if require_invite_code else None
 
-        # Check for existing primary_username instead of username
+        if require_invite_code:
+            # Validate the invite code
+            invite_code = InviteCode.query.filter_by(code=invite_code_input).first()
+            if not invite_code or invite_code.expiration_date < datetime.utcnow():
+                flash("⛔️ Invalid or expired invite code.", "error")
+                return redirect(url_for("register"))
+
+        # Check for existing username (assuming primary_username is the field to check against)
         if User.query.filter_by(primary_username=username).first():
             flash("💔 Username already taken.", "error")
             return redirect(url_for("register"))
@@ -466,16 +506,19 @@ def register():
 
         # Add user to the database
         db.session.add(new_user)
-        db.session.delete(invite_code)
         db.session.commit()
 
         flash("👍 Registration successful! Please log in.", "success")
         return redirect(url_for("login"))
 
-    return render_template("register.html", form=form)
+    # Pass the flag to template to conditionally render invite code field
+    return render_template(
+        "register.html", form=form, require_invite_code=require_invite_code
+    )
 
 
 @app.route("/enable-2fa", methods=["GET", "POST"])
+@limiter.limit("120 per minute")
 def enable_2fa():
     user_id = session.get("user_id")
     if not user_id:
@@ -522,6 +565,7 @@ def enable_2fa():
 
 
 @app.route("/disable-2fa", methods=["POST"])
+@limiter.limit("120 per minute")
 def disable_2fa():
     user_id = session.get("user_id")
     if not user_id:
@@ -540,6 +584,7 @@ def confirm_disable_2fa():
 
 
 @app.route("/show-qr-code")
+@limiter.limit("120 per minute")
 def show_qr_code():
     user = User.query.get(session["user_id"])
     if not user or not user.totp_secret:
@@ -567,6 +612,7 @@ def show_qr_code():
 
 
 @app.route("/verify-2fa-setup", methods=["POST"])
+@limiter.limit("120 per minute")
 def verify_2fa_setup():
     user = User.query.get(session["user_id"])
     if not user:
@@ -584,6 +630,7 @@ def verify_2fa_setup():
 
 
 @app.route("/login", methods=["GET", "POST"])
+@limiter.limit("120 per minute")
 def login():
     form = LoginForm()
     if form.validate_on_submit():
@@ -624,6 +671,7 @@ def login():
 
 
 @app.route("/verify-2fa-login", methods=["GET", "POST"])
+@limiter.limit("120 per minute")
 def verify_2fa_login():
     # Redirect to login if user is not authenticated
     if "user_id" not in session or not session.get("2fa_required", False):
@@ -657,48 +705,50 @@ def inbox(username):
         flash("Please log in to access your inbox.")
         return redirect(url_for("login"))
 
-    # Initialize variables
-    user = User.query.filter_by(primary_username=username).first()
-    secondary_users_dict = {}
+    logged_in_user_id = session["user_id"]
+    # Attempt to find a primary user matching the requested username
+    primary_user = User.query.filter_by(primary_username=username).first()
 
-    if user:
-        # User is a primary user, so fetch all messages for the primary user
+    # Initialize variables for secondary user and message query
+    secondary_user = None
+    messages = []
+
+    # Check if the requested username matches the logged-in primary user
+    if primary_user and primary_user.id == logged_in_user_id:
         messages = (
-            Message.query.filter_by(user_id=user.id).order_by(Message.id.desc()).all()
-        )
-
-        # Create a dictionary of secondary users for labeling purposes
-        secondary_users_dict = {su.id: su for su in user.secondary_users}
-
-        # Set the flag for secondary user to false since we are in the primary user's inbox
-        is_secondary = False
-
-    else:
-        # If not found, try to find a secondary user and its related messages
-        secondary_user = SecondaryUser.query.filter_by(username=username).first_or_404()
-        messages = (
-            Message.query.filter_by(secondary_user_id=secondary_user.id)
+            Message.query.filter_by(user_id=primary_user.id)
             .order_by(Message.id.desc())
             .all()
         )
+    else:
+        # Attempt to find a secondary user matching the requested username
+        # and verify it belongs to the logged-in user
+        secondary_user = SecondaryUser.query.filter_by(
+            username=username, user_id=logged_in_user_id
+        ).first()
+        if secondary_user:
+            messages = (
+                Message.query.filter_by(secondary_user_id=secondary_user.id)
+                .order_by(Message.id.desc())
+                .all()
+            )
+        else:
+            # If no matching primary or secondary user, deny access
+            flash("You are not authorized to view this inbox.")
+            return redirect(url_for("index"))
 
-        # Since we are viewing a secondary user's inbox, set the flag to true
-        is_secondary = True
-
-        # The primary user should still be accessible for operations like sending messages
-        user = secondary_user.primary_user
-
+    # Render the inbox template
     return render_template(
         "inbox.html",
-        user=user,
-        secondary_user=secondary_user if is_secondary else None,
+        user=primary_user if primary_user else secondary_user.primary_user,
+        secondary_user=secondary_user,
         messages=messages,
-        is_secondary=is_secondary,
-        secondary_users=secondary_users_dict,  # Pass this dictionary to the template
+        is_secondary=bool(secondary_user),
     )
 
 
 @app.route("/settings", methods=["GET", "POST"])
+@limiter.limit("120 per minute")
 @require_2fa
 def settings():
     user_id = session.get("user_id")
@@ -849,6 +899,7 @@ def settings():
 
 
 @app.route("/toggle-2fa", methods=["POST"])
+@limiter.limit("120 per minute")
 def toggle_2fa():
     user_id = session.get("user_id")
     if not user_id:
@@ -862,6 +913,7 @@ def toggle_2fa():
 
 
 @app.route("/change-password", methods=["POST"])
+@limiter.limit("120 per minute")
 def change_password():
     user_id = session.get("user_id")
     if not user_id:
@@ -907,6 +959,7 @@ def change_password():
 
 
 @app.route("/change-username", methods=["POST"])
+@limiter.limit("120 per minute")
 @require_2fa
 def change_username():
     user_id = session.get("user_id")
@@ -959,6 +1012,7 @@ def change_username():
 
 
 @app.route("/logout")
+@limiter.limit("120 per minute")
 def logout():
     # Explicitly remove specific session keys related to user authentication
     session.pop("user_id", None)
@@ -1000,6 +1054,7 @@ def get_email_from_pgp_key(pgp_key):
 
 
 @app.route("/submit_message/<username>", methods=["GET", "POST"])
+@limiter.limit("120 per minute")
 def submit_message(username):
     form = MessageForm()
 
@@ -1147,6 +1202,7 @@ def is_valid_pgp_key(key):
 
 
 @app.route("/update_pgp_key", methods=["GET", "POST"])
+@limiter.limit("120 per minute")
 def update_pgp_key():
     user_id = session.get("user_id")
     if not user_id:
@@ -1212,6 +1268,7 @@ list_keys()
 
 
 @app.route("/update_smtp_settings", methods=["GET", "POST"])
+@limiter.limit("120 per minute")
 def update_smtp_settings():
     user_id = session.get("user_id")
     if not user_id:
@@ -1261,6 +1318,7 @@ def update_smtp_settings():
 
 
 @app.route("/delete_message/<int:message_id>", methods=["POST"])
+@limiter.limit("120 per minute")
 def delete_message(message_id):
     if "user_id" not in session:
         flash("🔑 Please log in to continue.")
@@ -1283,6 +1341,7 @@ def delete_message(message_id):
 
 
 @app.route("/delete-account", methods=["POST"])
+@limiter.limit("120 per minute")
 @require_2fa
 def delete_account():
     user_id = session.get("user_id")
@@ -1306,6 +1365,7 @@ def delete_account():
 
 
 @app.route("/add-secondary-username", methods=["POST"])
+@limiter.limit("120 per minute")
 @require_2fa
 def add_secondary_username():
     user_id = session.get("user_id")
@@ -1351,6 +1411,7 @@ def add_secondary_username():
 
 
 @app.route("/settings/secondary/<secondary_username>/update", methods=["POST"])
+@limiter.limit("120 per minute")
 @require_2fa
 def update_secondary_username(secondary_username):
     # Ensure the user is logged in
@@ -1380,6 +1441,7 @@ def update_secondary_username(secondary_username):
 
 
 @app.route("/settings/secondary/<secondary_username>", methods=["GET", "POST"])
+@limiter.limit("120 per minute")
 @require_2fa
 def secondary_user_settings(secondary_username):
     # Ensure the user is logged in
@@ -1412,6 +1474,7 @@ def secondary_user_settings(secondary_username):
 
 
 @app.route("/create-checkout-session", methods=["POST"])
+@limiter.limit("120 per minute")
 def create_checkout_session():
     user_id = session.get("user_id")
     if not user_id:
@@ -1434,8 +1497,8 @@ def create_checkout_session():
         origin_page = request.referrer or url_for("index")
         session["origin_page"] = origin_page
 
-        price_id = "price_1OhiU5LcBPqjxU07a4eKQHrO"  # Test
-        # price_id = "price_1OhhYFLcBPqjxU07u2wYbUcF"
+        # price_id = "price_1OhiU5LcBPqjxU07a4eKQHrO"  # Test
+        price_id = "price_1OhhYFLcBPqjxU07u2wYbUcF"
 
         checkout_session = stripe.checkout.Session.create(
             customer=user.stripe_customer_id,
@@ -1457,6 +1520,7 @@ def create_checkout_session():
 
 
 @app.route("/payment-success")
+@limiter.limit("120 per minute")
 def payment_success():
     session_id = request.args.get("session_id")
 
@@ -1509,6 +1573,7 @@ def is_safe_url(target):
 
 
 @app.route("/payment-cancel")
+@limiter.limit("120 per minute")
 def payment_cancel():
     origin_page = request.args.get("origin", url_for("index"))
     if is_safe_url(origin_page):
@@ -1577,6 +1642,7 @@ def find_user_by_stripe_customer_id(customer_id):
 
 
 @app.route("/cancel-subscription", methods=["POST"])
+@limiter.limit("120 per minute")
 @require_2fa
 def cancel_subscription():
     user_id = session.get("user_id")
@@ -1626,6 +1692,7 @@ def has_paid_features(user_id):
 
 
 @app.route("/admin/toggle_verified/<int:user_id>", methods=["POST"])
+@limiter.limit("120 per minute")
 @require_2fa
 def toggle_verified(user_id):
     if not session.get("is_admin", False):
@@ -1640,6 +1707,7 @@ def toggle_verified(user_id):
 
 
 @app.route("/admin/toggle_paid/<int:user_id>", methods=["POST"])
+@limiter.limit("120 per minute")
 @require_2fa
 def toggle_paid(user_id):
     if not session.get("is_admin", False):
@@ -1654,6 +1722,7 @@ def toggle_paid(user_id):
 
 
 @app.route("/admin/toggle_admin/<int:user_id>", methods=["POST"])
+@limiter.limit("120 per minute")
 @require_2fa
 def toggle_admin(user_id):
     if not session.get("is_admin", False):

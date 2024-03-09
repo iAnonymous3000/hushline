@@ -44,7 +44,7 @@ STRIPE_SECRET_KEY=$(whiptail --inputbox "Enter the Stripe secret key" 8 39 "sk_t
 STRIPE_WH_SECRET=$(whiptail --inputbox "Enter the Stripe Webhook Signing Secret" 8 39 --title "Stripe Webhook Secret" 3>&1 1>&2 2>&3)
 
 # Install Python, pip, Git, Nginx, and MariaDB
-sudo apt install python3 python3-pip git nginx default-mysql-server python3-venv gnupg tor certbot python3-certbot-nginx libnginx-mod-http-geoip ufw fail2ban -y
+sudo apt install python3 python3-pip git nginx default-mysql-server python3-venv gnupg tor certbot python3-certbot-nginx libnginx-mod-http-geoip ufw fail2ban redis redis-server -y
 
 ############################
 # Server, Nginx, HTTPS setup
@@ -295,6 +295,19 @@ echo "SECRET_KEY=$SECRET_KEY" >> .env
 echo "STRIPE_SECRET_KEY=$STRIPE_SECRET_KEY" >> .env
 echo "STRIPE_WH_SECRET=$STRIPE_WH_SECRET" >> .env
 
+# Ask the user if registration should require codes and directly update the .env file
+if whiptail --title "Require Registration Codes" --yesno "Do you want to require registration codes for new users?" 8 78; then
+    echo "Requiring registration codes for new users..."
+    echo "REGISTRATION_CODES_REQUIRED=True" >> .env
+else
+    echo "Not requiring registration codes for new users..."
+    echo "REGISTRATION_CODES_REQUIRED=False" >> .env
+fi
+
+# Start Redis
+sudo systemctl enable redis-server
+sudo systemctl start redis-server
+
 # Start MariaDB
 systemctl start mariadb
 
@@ -350,6 +363,9 @@ if ! python init_db.py; then
 else
     echo "✅ Database initialized successfully."
 fi
+
+cp assets/50-server.conf /etc/mysql/mariadb.conf.d/
+mysql -u root -p'$DB_PASS' -e "REVOKE FILE ON *.* FROM '$DB_USER'@'localhost'; FLUSH PRIVILEGES;"
 
 # Define the working directory
 WORKING_DIR=$(pwd)
