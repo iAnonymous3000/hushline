@@ -1,5 +1,19 @@
 #!/bin/bash
 
+####################################################################################################
+
+# BEGIN SCRIPT
+
+# This section starts the installer, ensuring it runs with root privileges for necessary system 
+# changes, setting strict error handling to immediately halt on errors, and introducing Hush Line 
+# with ASCII art and a brief description. An error_exit function provides a fallback to gracefully 
+# handle and report errors, ensuring a clear exit strategy if the script encounters issues during 
+# execution.
+
+####################################################################################################
+
+set -euo pipefail
+
 #Run as root
 if [[ $EUID -ne 0 ]]; then
   echo "Script needs to run as root. Elevating permissions now."
@@ -31,453 +45,462 @@ error_exit() {
 # Trap any errors and call the error_exit function
 trap error_exit ERR
 
+####################################################################################################
+
+# INSTALLATION STUFF
+
+# Here, the script prepares the environment for Hush Line by updating system packages and installing 
+# necessary dependencies like Python, Nginx, and MariaDB. It checks for the presence of a specific 
+# user and creates it if missing, ensuring the application runs under a dedicated account for 
+# security. Additionally, Rust and Python's Poetry are installed to handle backend dependencies.
+
+####################################################################################################
+
+GIT="https://github.com/scidsg/hushline.git"
+HUSHLINE_USER="hushlineuser"
+HUSHLINE_GROUP="www-data"
+
 # Update packages and install whiptail
 export DEBIAN_FRONTEND=noninteractive
 apt update && apt -y dist-upgrade 
-apt install whiptail -y
-
-# Collect variables using whiptail
-DB_NAME=$(whiptail --inputbox "Enter the database name" 8 39 "hushlinedb" --title "Database Name" 3>&1 1>&2 2>&3)
-DB_USER=$(whiptail --inputbox "Enter the database username" 8 39 "hushlineuser" --title "Database Username" 3>&1 1>&2 2>&3)
-DB_PASS=$(whiptail --passwordbox "Enter the database password" 8 39 "dbpassword" --title "Database Password" 3>&1 1>&2 2>&3)
-STRIPE_SECRET_KEY=$(whiptail --inputbox "Enter the Stripe secret key" 8 39 "sk_test_51OhDeALcBPqjxU07nk5zZ0eWvTRDgBc0u9bLjmRhXmzTczwPHq28yBwF3I9NugqnT4N5QZFr1Keb906DzEOFHXHY00ugAXDHrA" --title "Stripe Secret Key" 3>&1 1>&2 2>&3)
-STRIPE_WH_SECRET=$(whiptail --inputbox "Enter the Stripe Webhook Signing Secret" 8 39 --title "Stripe Webhook Secret" 3>&1 1>&2 2>&3)
 
 # Install Python, pip, Git, Nginx, and MariaDB
-sudo apt install python3 python3-pip git nginx default-mysql-server python3-venv gnupg tor certbot python3-certbot-nginx libnginx-mod-http-geoip ufw fail2ban redis redis-server -y
-
-############################
-# Server, Nginx, HTTPS setup
-############################
-
-DOMAIN=$(whiptail --inputbox "Enter your domain name:" 8 60 "beta.hushline.app" 3>&1 1>&2 2>&3)
-EMAIL=$(whiptail --inputbox "Enter your email:" 8 60 "hushline@scidsg.org" 3>&1 1>&2 2>&3)
-GIT=$(whiptail --inputbox "Enter your git repo's URL:" 8 60 "https://github.com/scidsg/hushline" 3>&1 1>&2 2>&3)
-
-# Check for valid domain name format
-until [[ $DOMAIN =~ ^[a-zA-Z0-9][a-zA-Z0-9\.-]*\.[a-zA-Z]{2,}$ ]]; do
-    DOMAIN=$(whiptail --inputbox "Invalid domain name format. Please enter a valid domain name:" 8 60 3>&1 1>&2 2>&3)
-done
-export DOMAIN
-export EMAIL
-export GIT
-
-# Debug: Print the value of the DOMAIN variable
-echo "Domain: $DOMAIN"
-
-# Create Tor configuration file
-tee /etc/tor/torrc << EOL
-RunAsDaemon 1
-HiddenServiceDir /var/lib/tor/$DOMAIN/
-HiddenServicePort 80 unix:/var/www/html/$DOMAIN/hushline-hosted.sock
-EOL
-
-# Restart Tor service
-systemctl restart tor.service
-sleep 10
-
-# Get the Onion address
-ONION_ADDRESS=$(cat /var/lib/tor/$DOMAIN/hostname)
-SAUTEED_ONION_ADDRESS=$(echo $ONION_ADDRESS | tr -d '.')
-
-# Configure Nginx
-cat > /etc/nginx/sites-available/$DOMAIN.nginx << EOL
-server {
-        root /var/www/html/$DOMAIN;
-        server_name $DOMAIN;
-        location / {
-            proxy_pass http://unix:/var/www/html/$DOMAIN/hushline-hosted.sock;
-            proxy_set_header Host \$host;
-            proxy_set_header X-Real-IP \$remote_addr;
-            proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-            proxy_set_header X-Forwarded-Proto \$scheme;
-            proxy_connect_timeout 300s;
-            proxy_send_timeout 300s;
-            proxy_read_timeout 300s;
-        }
-
-        location = /.well-known/security.txt {
-            alias /var/www/html/$DOMAIN/.well-known/security.txt;
-        }
-                
-        add_header Strict-Transport-Security "max-age=63072000; includeSubdomains";
-        add_header X-Frame-Options DENY;
-        add_header X-Content-Type-Options nosniff;
-        add_header Onion-Location http://$ONION_ADDRESS\$request_uri;
-        add_header Content-Security-Policy "default-src 'self'; script-src 'self' https://js.stripe.com https://unpkg.com; img-src 'self' data: https:; style-src 'self'; frame-ancestors 'none'; connect-src 'self' https://api.stripe.com; child-src https://js.stripe.com; frame-src https://js.stripe.com;";
-        add_header Permissions-Policy "geolocation=(), midi=(), notifications=(), push=(), sync-xhr=(), microphone=(), camera=(), magnetometer=(), gyroscope=(), speaker=(), vibrate=(), fullscreen=(), payment=(), interest-cohort=()";
-        add_header Referrer-Policy "no-referrer";
-        add_header X-XSS-Protection "1; mode=block";
-}
-server {
-        server_name $ONION_ADDRESS;
-        access_log /var/log/nginx/hs-my-website.log;
-        index index.html;
-        root /var/www/html/$DOMAIN;
-                
-        add_header X-Frame-Options DENY;
-        add_header X-Content-Type-Options nosniff;
-        add_header Content-Security-Policy "default-src 'self'; script-src 'self' https://js.stripe.com https://unpkg.com; img-src 'self' data: https:; style-src 'self'; frame-ancestors 'none'; connect-src 'self' https://api.stripe.com; child-src https://js.stripe.com; frame-src https://js.stripe.com;";
-        add_header Permissions-Policy "geolocation=(), midi=(), notifications=(), push=(), sync-xhr=(), microphone=(), camera=(), magnetometer=(), gyroscope=(), speaker=(), vibrate=(), fullscreen=(), payment=(), interest-cohort=()";
-        add_header Referrer-Policy "no-referrer";
-        add_header X-XSS-Protection "1; mode=block";
-}
-server {
-        listen 80;
-        server_name $DOMAIN; # YOUR URLS
-        return 301 https://$DOMAIN\$request_uri;
-}
-server {
-    listen 80;
-    server_name $SAUTEED_ONION_ADDRESS.$DOMAIN;
-
-    location / {
-        proxy_pass http://unix:/var/www/html/$DOMAIN/hushline-hosted.sock;
-    }
-}
-EOL
-
-# Configure Nginx with privacy-preserving logging
-cat > /etc/nginx/nginx.conf << EOL
-user www-data;
-worker_processes auto;
-pid /run/nginx.pid;
-include /etc/nginx/modules-enabled/*.conf;
-events {
-        worker_connections 768;
-        # multi_accept on;
-}
-http {
-        ##
-        # Basic Settings
-        ##
-        sendfile on;
-        tcp_nopush on;
-        types_hash_max_size 2048;
-        # server_tokens off;
-        server_names_hash_bucket_size 128;
-        # server_name_in_redirect off;
-        include /etc/nginx/mime.types;
-        default_type application/octet-stream;
-        ##
-        # SSL Settings
-        ##
-        ssl_protocols TLSv1 TLSv1.1 TLSv1.2 TLSv1.3; # Dropping SSLv3, ref: POODLE
-        ssl_prefer_server_ciphers on;
-        ##
-        # Logging Settings
-        ##
-        # access_log /var/log/nginx/access.log;
-        error_log /var/log/nginx/error.log;
-        ##
-        # Gzip Settings
-        ##
-        gzip on;
-        # gzip_vary on;
-        # gzip_proxied any;
-        # gzip_comp_level 6;
-        # gzip_buffers 16 8k;
-        # gzip_http_version 1.1;
-        # gzip_types text/plain text/css application/json application/javascript text/xml application/xml application/xml+rss text/javascript;
-        ##
-        # Virtual Host Configs
-        ##
-        include /etc/nginx/conf.d/*.conf;
-        include /etc/nginx/sites-enabled/*;
-        ##
-        # Enable privacy preserving logging
-        ##
-        geoip_country /usr/share/GeoIP/GeoIP.dat;
-        log_format privacy '0.0.0.0 - \$remote_user "\$request" \$status \$body_bytes_sent "\$http_referer"';
-
-        access_log /var/log/nginx/access.log privacy;
-}
-EOL
-
-ln -sf /etc/nginx/sites-available/$DOMAIN.nginx /etc/nginx/sites-enabled/
-nginx -t && systemctl restart nginx
-
-if [ -e "/etc/nginx/sites-enabled/default" ]; then
-    rm /etc/nginx/sites-enabled/default
-fi
-ln -sf /etc/nginx/sites-available/$DOMAIN.nginx /etc/nginx/sites-enabled/
-nginx -t && systemctl restart nginx || error_exit
+apt install -y \
+    python3 \
+    python3-pip \
+    git \
+    nginx \
+    default-mysql-server \
+    python3-venv \
+    certbot \
+    python3-certbot-nginx \
+    libnginx-mod-http-geoip \
+    ufw \
+    fail2ban \
+    redis \
+    redis-server \
+    apt-transport-https
 
 cd /var/www/html
-git clone $GIT
-REPO_NAME=$(basename $GIT .git)
-mv $REPO_NAME $DOMAIN
-
-SERVER_IP=$(curl -s ifconfig.me)
-WIDTH=$(tput cols)
-whiptail --msgbox --title "Instructions" "\nPlease ensure that your DNS records are correctly set up before proceeding:\n\nAdd an A record with the name: @ and content: $SERVER_IP\n* Add a CNAME record with the name $SAUTEED_ONION_ADDRESS.$DOMAIN and content: $DOMAIN\n* Add a CAA record with the name: @ and content: 0 issue \"letsencrypt.org\"\n" 14 $WIDTH
-# Request the certificates
-echo "⏲️  Waiting 30 seconds for DNS to update..."
-sleep 30
-certbot --nginx -d $DOMAIN,$SAUTEED_ONION_ADDRESS.$DOMAIN --agree-tos --non-interactive --no-eff-email --email ${EMAIL}
-
-echo "Configuring automatic renewing certificates..."
-# Set up cron job to renew SSL certificate
-(crontab -l 2>/dev/null; echo "30 2 * * 1 /usr/bin/certbot renew --quiet") | crontab -
-echo "✅ Automatic HTTPS certificates configured."
-
-# Enable IPv6 in Nginx configuration
-NGINX_CONF="/etc/nginx/sites-available/$DOMAIN.nginx"
-sed -i '/listen 80;/a \    listen [::]:80;' $NGINX_CONF
-sed -i '/listen 443 ssl;/a \    listen [::]:443 ssl;' $NGINX_CONF
-echo "✅ IPv6 configuration appended to Nginx configuration file."
-
-# Append OCSP Stapling configuration for SSL
-sed -i "/listen \[::\]:443 ssl;/a \    ssl_stapling on;\n    ssl_stapling_verify on;\n    ssl_trusted_certificate /etc/letsencrypt/live/$DOMAIN/chain.pem;\n    resolver 9.9.9.9 1.1.1.1 valid=300s;\n    resolver_timeout 5s;\n    ssl_session_cache shared:SSL:10m;" $NGINX_CONF
-echo "✅ OCSP Stapling, SSL Session, and Resolver Timeout added."
-
-# Test the Nginx configuration and reload if successful
-nginx -t && systemctl reload nginx || echo "Error: Nginx configuration test failed, please check the configuration."
-
-####################################
-####################################
-
-cd $DOMAIN
-
-# Download hello@scidsg.org key referenced in the security.txt file
-wget https://keys.openpgp.org/vks/v1/by-fingerprint/1B539E29F407E9E8896035DF8F4E83FB1B785F8E > public.asc
-
-mkdir -p .well-known
-
-# Configure Nginx with privacy-preserving logging
-cat > /var/www/html/$DOMAIN/.well-known/security.txt << EOL
-Contact: mailto:security@scidsg.org
-Expires: 2025-01-01T00:00:00Z
-Encryption: https://$DOMAIN/public.asc
-Acknowledgments: https://github.com/scidsg/hushline/blob/main/ACKNOWLEDGMENTS.md
-Policy: https://github.com/scidsg/hushline/blob/main/SECURITY.md
-Canonical: https://$DOMAIN/.well-known/security.txt
-EOL
-
-# Temporarily disable the error trap
-trap - ERR
-
-# Ask the user if paid features should be enabled by default
-PAID_FEATURES_ENABLED=$(whiptail --title "Enable Paid Features" --yesno "Do you want to enable paid features by default for all users?" 8 78 3>&1 1>&2 2>&3)
-
-exitstatus=$?
-if [ $exitstatus = 0 ]; then
-    # User selected Yes, enable paid features by default
-    echo "Enabling paid features by default..."
-    sed -i 's/has_paid = db.Column(db.Boolean, default=False)/has_paid = db.Column(db.Boolean, default=True)/' /var/www/html/$DOMAIN/app.py
-else
-    # User selected No, keep the default setting
-    echo "Keeping paid features disabled by default..."
+if [ ! -d hushline ]; then
+    git clone $GIT
 fi
+cd hushline
+git switch migrations
+sleep 5
+chmod +x install.sh
 
-# Re-enable the error trap
-trap error_exit ERR
-
-mkdir -p ~/.gnupg
-chmod 700 ~/.gnupg
+# Create a dedicated user for running the application
+if ! id "$HUSHLINE_USER" &>/dev/null; then
+    echo "Creating a dedicated user: $HUSHLINE_USER..."
+    useradd -r -s /bin/false -g $HUSHLINE_GROUP $HUSHLINE_USER
+    echo "✅ Dedicated user $HUSHLINE_USER created."
+else
+    echo "👍 Dedicated user $HUSHLINE_USER already exists."
+fi
+if ! command -v rustc &> /dev/null; then
+    echo "Rust is not installed. Installing Rust..."
+    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+    echo 'export PATH="$HOME/.cargo/bin:$PATH"' >> ~/.bashrc
+else
+    echo "Rust is already installed."
+fi
 
 # Create and activate Python virtual environment
 python3 -m venv venv
 source venv/bin/activate
 
+# Debian only have 1.3.2, and we need 1.6.0 or higher
+curl -sSL https://install.python-poetry.org | python3 -
+export PATH="/root/.local/bin:$PATH"
+echo 'export PATH="/root/.local/bin:$PATH"' >> ~/.bashrc
+poetry lock
+poetry install
+
+# Ensuring virtual environment binaries are executable only if necessary
+echo "Checking and setting execute permissions on virtual environment binaries..."
+
+for file in /var/www/html/hushline/venv/bin/*; do
+    if [ ! -x "$file" ]; then
+        echo "Setting execute permission on $file"
+        chmod +x "$file"
+        echo "✅ Execute permission set."
+    else
+        echo "👍 Permissions already set."
+    fi
+done
+
 # Install Flask and other dependencies
-pip3 install -r requirements.txt
+poetry self add poetry-plugin-export
+export PYTHON_KEYRING_BACKEND=keyring.backends.null.Keyring
 
-SECRET_KEY=$(python3 -c 'import os; print(os.urandom(64).hex())')
-ENCRYPTION_KEY=$(python3 -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())')
+####################################################################################################
 
-# Store in .env file
-echo "ENCRYPTION_KEY=$ENCRYPTION_KEY" > .env
-echo "DB_NAME=$DB_NAME" >> .env  
-echo "DB_USER=$DB_USER" >> .env
-echo "DB_PASS=$DB_PASS" >> .env
-echo "SECRET_KEY=$SECRET_KEY" >> .env
-echo "STRIPE_SECRET_KEY=$STRIPE_SECRET_KEY" >> .env
-echo "STRIPE_WH_SECRET=$STRIPE_WH_SECRET" >> .env
+# .ENV STUFF
 
-# Ask the user if registration should require codes and directly update the .env file
-if whiptail --title "Require Registration Codes" --yesno "Do you want to require registration codes for new users?" 8 78; then
-    echo "Requiring registration codes for new users..."
-    echo "REGISTRATION_CODES_REQUIRED=True" >> .env
+# This segment of the script configures Hush Line's environment by dynamically creating a .env file 
+# if it doesn't already exist. It populates this file with essential variables, including secret 
+# keys for security, database connection details, and configuration options for debug and 
+# registration codes. User inputs are gathered via whiptail dialogs for a friendly interface, 
+# allowing for customized setup.
+
+####################################################################################################
+
+DB_NAME="${DB_NAME:-defaultdbname}"
+DB_USER="${DB_USER:-defaultdbuser}"
+DB_PASS="${DB_PASS:-defaultdbpass}"
+
+touch .env
+
+# Update .env file
+if ! egrep -q '^SECRET_KEY=' .env; then
+    echo 'Generating new secret key'
+    SECRET_KEY=$(openssl rand -hex 32)
+    echo "SECRET_KEY=$SECRET_KEY" >> .env
+fi
+
+if ! egrep -q '^ENCRYPTION_KEY=' .env; then
+    echo 'Generating new secret key'
+    ENCRYPTION_KEY=$(python3 -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())')
+    echo "ENCRYPTION_KEY=$ENCRYPTION_KEY" >> .env
+fi
+
+if ! egrep -q '^DB_NAME=' .env; then
+    echo 'Setting DB name'
+    DB_NAME=$(whiptail --inputbox "Enter the database name" 8 39 "hushlinedb" --title "Database Name" 3>&1 1>&2 2>&3)
+    echo "DB_NAME=$DB_NAME" >> .env
+fi
+
+if ! egrep -q '^DB_USER=' .env; then
+    echo 'Setting DB user'
+    DB_USER=$(whiptail --inputbox "Enter the database username" 8 39 "hushlineuser" --title "Database Username" 3>&1 1>&2 2>&3)
+    echo "DB_USER=$DB_USER" >> .env
+fi
+
+if ! egrep -q '^DB_PASS=' .env; then
+    echo 'Setting DB password'
+    DB_PASS=$(whiptail --passwordbox "Enter the database password" 8 39 "dbpassword" --title "Database Password" 3>&1 1>&2 2>&3)
+    echo "DB_PASS=$DB_PASS" >> .env
+fi
+
+if ! grep -q '^HUSHLINE_DEBUG_OPTS=' .env; then
+    echo 'Setting HUSHLINE_DEBUG_OPTS to 0'
+    echo "HUSHLINE_DEBUG_OPTS=0" >> .env
+fi
+
+if ! egrep -q '^SQLALCHEMY_DATABASE_URI=' .env; then
+    echo 'Setting SQLALCHEMY_DATABASE_URI'
+    echo "SQLALCHEMY_DATABASE_URI=sqlite:////var/lib/hushline/hushline.db" >> .env
+fi
+
+if ! egrep -q '^REGISTRATION_CODES_REQUIRED=' .env; then
+    # Ask the user if registration should require codes and directly update the .env file
+    if whiptail --title "Require Registration Codes" --yesno "Do you want to require registration codes for new users?" 8 78; then
+        echo "Requiring registration codes for new users..."
+        echo "REGISTRATION_CODES_REQUIRED=True" >> .env
+    else
+        echo "Not requiring registration codes for new users..."
+        echo "REGISTRATION_CODES_REQUIRED=False" >> .env
+    fi
+fi
+
+chmod 600 .env
+
+####################################################################################################
+
+# TOR STUFF
+
+# In this part, the script enhances Hush Line's privacy features by integrating it with the Tor 
+# network. It adds the Tor package repository if it's not already present, ensuring access to the 
+# latest versions directly from the Tor Project. This step includes verifying and adding the 
+# repository's GPG key for secure package installations. Next, it configures Tor by appending a 
+# custom hidden service directory and port configuration to the torrc file, making Hush Line 
+# accessible via a .onion address.
+
+####################################################################################################
+
+TORRC_PATH="/etc/tor/torrc"
+DOMAIN_CONFIG="HiddenServiceDir /var/lib/tor/hushline/"
+DISTRIBUTION=$(lsb_release -cs)
+REPO_URL="https://deb.torproject.org/torproject.org ${DISTRIBUTION} main"
+REPO_SRC_URL="https://deb.torproject.org/torproject.org ${DISTRIBUTION} main"
+GPG_KEY_URL="https://deb.torproject.org/torproject.org/A3C4F0F979CAA22CDBA8F512EE8CBC9E886DDD89.asc"
+KEYRING_PATH="/usr/share/keyrings/tor-archive-keyring.gpg"
+
+# Enable Tor Package Repo
+# Check if the Tor repository is already in the sources.list or sources.list.d/
+if ! grep -Rq "^deb \[signed-by=/usr/share/keyrings/tor-archive-keyring.gpg\] ${REPO_URL}$" /etc/apt/sources.list /etc/apt/sources.list.d/*; then
+    echo "deb [signed-by=/usr/share/keyrings/tor-archive-keyring.gpg] ${REPO_URL}" | tee /etc/apt/sources.list.d/tor.list
+    echo "deb-src [signed-by=/usr/share/keyrings/tor-archive-keyring.gpg] ${REPO_SRC_URL}" | tee -a /etc/apt/sources.list.d/tor.list
+    echo "✅ Added the Tor repository..."
 else
-    echo "Not requiring registration codes for new users..."
-    echo "REGISTRATION_CODES_REQUIRED=False" >> .env
+    echo "👍 Tor repository already exists."
 fi
 
-# Start Redis
-sudo systemctl enable redis-server
-sudo systemctl start redis-server
-
-# Start MariaDB
-systemctl start mariadb
-
-# Secure MariaDB Installation
-mysql_secure_installation
-
-# Create an override file for MariaDB to restart on failure
-echo "Creating MariaDB service override..."
-mkdir -p /etc/systemd/system/mariadb.service.d
-echo -e "[Service]\nRestart=on-failure\nRestartSec=5s" | tee /etc/systemd/system/mariadb.service.d/override.conf
-
-# Reload the systemd daemon and restart MariaDB to apply changes
-systemctl daemon-reload
-systemctl restart mariadb
-
-sudo mkdir -p /etc/mariadb/ssl
-
-sudo cp /etc/letsencrypt/live/$DOMAIN/fullchain.pem /etc/mariadb/ssl/
-sudo cp /etc/letsencrypt/live/$DOMAIN/privkey.pem /etc/mariadb/ssl/
-
-sudo chown mysql:mysql /etc/mariadb/ssl/fullchain.pem /etc/mariadb/ssl/privkey.pem
-sudo chmod 400 /etc/mariadb/ssl/fullchain.pem /etc/mariadb/ssl/privkey.pem
-
-# MariaDB configuration file path
-MY_CNF="/etc/mysql/my.cnf"
-
-# Append SSL configuration to the MariaDB configuration file
-echo "ssl_cert=/etc/mariadb/ssl/fullchain.pem" | sudo tee -a $MY_CNF > /dev/null
-echo "ssl_key=/etc/mariadb/ssl/privkey.pem" | sudo tee -a $MY_CNF > /dev/null
-
-# Restart MariaDB to apply the new configuration
-sudo systemctl restart mariadb
-
-echo "✅ SSL configuration has been added to MariaDB."
-
-# Check if the database exists, create if not
-if ! mysql -sse "SELECT EXISTS(SELECT 1 FROM information_schema.schemata WHERE schema_name = '$DB_NAME')" | grep -q 1; then
-    mysql -e "CREATE DATABASE $DB_NAME;"
-fi
-
-# Check if the user exists and create it if it doesn't
-if ! mysql -sse "SELECT EXISTS(SELECT 1 FROM mysql.user WHERE user = '$DB_USER' AND host = 'localhost')" | grep -q 1; then
-    mysql -e "CREATE USER '$DB_USER'@'localhost' IDENTIFIED BY '$DB_PASS';"
-    mysql -e "GRANT ALL PRIVILEGES ON $DB_NAME.* TO '$DB_USER'@'localhost';"
-    mysql -e "FLUSH PRIVILEGES;"
-fi
-
-# Verify Database Connection and Initialize DB
-echo "Verifying database connection and initializing database..."
-if ! python init_db.py; then
-    echo "Database initialization failed. Please check your settings."
-    exit 1
+# Check if the GPG keyring already exists
+if [ ! -f "$KEYRING_PATH" ]; then
+    wget -qO- "$GPG_KEY_URL" | gpg --dearmor | tee "$KEYRING_PATH" >/dev/null
+    apt update
+    apt install -y tor deb.torproject.org-keyring
+    echo "✅ Added the Tor GPG key and installed Tor."
 else
-    echo "✅ Database initialized successfully."
+    echo "👍 Tor GPG keyring already exists."
 fi
 
-cp assets/50-server.conf /etc/mysql/mariadb.conf.d/
-mysql -u root -p'$DB_PASS' -e "REVOKE FILE ON *.* FROM '$DB_USER'@'localhost'; FLUSH PRIVILEGES;"
+# Check if the torrc file contains specific configuration for your domain
+if grep -q "$DOMAIN_CONFIG" "$TORRC_PATH"; then
+    echo "👍 Tor configuration for Hush Line already exists in $TORRC_PATH. Skipping configuration."
+else
+    echo -e "\n$DOMAIN_CONFIG" >> "$TORRC_PATH"
+    echo "HiddenServicePort 80 unix:/var/www/html/hushline/hushline.sock" >> "$TORRC_PATH"
+    echo "✅ Added Tor configuration for Hush Line to $TORRC_PATH."
 
-# Define the working directory
-WORKING_DIR=$(pwd)
+    # Restart Tor to apply new configuration
+    systemctl restart tor
 
-# Create a systemd service file for the Flask app
-SERVICE_FILE=/etc/systemd/system/hushline-hosted.service
-cat <<EOF | tee $SERVICE_FILE
-[Unit]
-Description=Gunicorn instance to serve the Hushline Flask app
-After=network.target
+    # Restart Tor service
+    systemctl restart tor.service
+    sleep 10
+fi
 
-[Service]
-User=$USER
-Group=www-data
-WorkingDirectory=$WORKING_DIR
-ExecStart=$WORKING_DIR/venv/bin/gunicorn --workers 2 --bind unix:$WORKING_DIR/hushline-hosted.sock -m 007 --timeout 120 wsgi:app
+####################################################################################################
 
-[Install]
-WantedBy=multi-user.target
-EOF
+# NGINX STUFF
 
-# Create an override file for the Hushline service to restart on failure
-echo "Creating Hushline service override..."
-mkdir -p /etc/systemd/system/hushline-hosted.service.d
-echo -e "[Service]\nRestart=on-failure\nRestartSec=5s" | tee /etc/systemd/system/hushline-hosted.service.d/override.conf
+# In this section, the script configures Nginx to serve Hush Line, setting up a reverse proxy to 
+# forward requests to the application. It involves copying a predefined Nginx configuration file, 
+# replacing placeholders with actual domain names and paths, and ensuring Nginx recognizes the new 
+# site configuration by linking it into the sites-enabled directory. This process also includes a 
+# verification step using nginx -t to ensure the configuration is correct before attempting to 
+# restart Nginx.
 
-# Start and enable the Flask app service
-systemctl daemon-reload
-systemctl start hushline-hosted
-systemctl enable hushline-hosted
-systemctl restart hushline-hosted
+####################################################################################################
 
-# Restart Nginx to apply changes
-systemctl restart nginx
+DOMAIN="test.ourdemo.app"
+NGINX_SITE_PATH="/etc/nginx/sites-available/hushline.nginx"
+NGINX_CONF_PATH="/etc/nginx/nginx.conf"
+ONION_ADDRESS=$(cat /var/lib/tor/hushline/hostname)
+SAUTEED_ONION_ADDRESS=$(echo "$ONION_ADDRESS" | tr -d '.')
 
-# Start and enable Nginx
-systemctl enable nginx
+# Check if hushline.nginx exists in /etc/nginx/sites-available/
+if [ ! -f "$NGINX_SITE_PATH" ]; then
+    echo "Nginx site configuration does not exist, copying template and updating placeholders..."
 
-# Enable the "security" and "updates" repositories
+    # Copy the Nginx site configuration template
+    cp files/hushline.nginx $NGINX_SITE_PATH
+
+    # Copy the Nginx main configuration template
+    cp files/nginx.conf $NGINX_CONF_PATH
+
+    # Replace placeholders in the Nginx site configuration
+    sed -i "s/\$DOMAIN/$DOMAIN/g" $NGINX_SITE_PATH
+    sed -i "s/\$ONION_ADDRESS/$ONION_ADDRESS/g" $NGINX_SITE_PATH
+    sed -i "s/\$SAUTEED_ONION_ADDRESS/$SAUTEED_ONION_ADDRESS/g" $NGINX_SITE_PATH
+
+    echo "✅ Nginx configuration updated successfully."
+
+    ln -sf $NGINX_SITE_PATH /etc/nginx/sites-enabled/
+    nginx -t && systemctl restart nginx
+    
+    if [ -e "/etc/nginx/sites-enabled/default" ]; then
+        rm /etc/nginx/sites-enabled/default
+    fi
+    if nginx -t; then
+        systemctl restart nginx
+    else
+        error_exit
+    fi
+else
+    echo "👍 Nginx site configuration already exists."
+fi
+
+####################################################################################################
+
+# LET'S ENCRYPT
+
+# This section secures Hush Line's web traffic by obtaining SSL certificates from Let's Encrypt. It 
+# prompts the user to ensure DNS records are set up correctly before proceeding with certificate 
+# acquisition. Utilizing certbot with Nginx, the script automates the certificate request and 
+# installation process, including configuring automatic renewal. Additionally, it adjusts Nginx 
+# settings to support IPv6 and enhances SSL security with OCSP Stapling and resolver configurations. 
+
+####################################################################################################
+
+EMAIL="hushline@scidsg.org"
+SERVER_IP=$(curl -s ifconfig.me)
+WIDTH=$(tput cols)
+
+# Check if the SSL certificate directory for the domain exists
+if [ ! -d "/etc/letsencrypt/live/"$DOMAIN"/" ]; then
+    echo "SSL certificate directory for $DOMAIN does not exist. Obtaining SSL certificate..."
+    whiptail --msgbox --title "Instructions" "\nPlease ensure that your DNS records are correctly set up before proceeding:\n\nAdd an A record with the name: @ and content: $SERVER_IP\n* Add a CNAME record with the name $SAUTEED_ONION_ADDRESS.$DOMAIN and content: $DOMAIN\n* Add a CAA record with the name: @ and content: 0 issue \"letsencrypt.org\"\n" 14 "$WIDTH"
+    
+    # Request the certificates
+    echo "⏲️  Waiting 30 seconds for DNS to update..."
+    sleep 30
+    certbot --nginx -d "$DOMAIN" -d "$SAUTEED_ONION_ADDRESS.$DOMAIN" --agree-tos --non-interactive --no-eff-email --email "$EMAIL"
+    echo "30 2 * * 1 root /usr/bin/certbot renew --quiet" > /etc/cron.d/hushline_cert_renewal
+    echo "✅ Automatic HTTPS certificates configured."
+
+    # Enable IPv6 in Nginx configuration
+    sed -i '/listen 80;/a \    listen [::]:80;' "$NGINX_SITE_PATH"
+    sed -i '/listen 443 ssl;/a \    listen [::]:443 ssl;' "$NGINX_SITE_PATH"
+    echo "✅ IPv6 configuration appended to Nginx configuration file."
+
+    # Append OCSP Stapling configuration for SSL
+    sed -i "/listen \[::\]:443 ssl;/a \    ssl_stapling on;\n    ssl_stapling_verify on;\n    ssl_trusted_certificate /etc/letsencrypt/live/$DOMAIN/chain.pem;\n    resolver 9.9.9.9 1.1.1.1 valid=300s;\n    resolver_timeout 5s;\n    ssl_session_cache shared:SSL:10m;" "$NGINX_SITE_PATH"
+    echo "✅ OCSP Stapling, SSL Session, and Resolver Timeout added."
+
+    # Test the Nginx configuration and reload if successful
+    nginx -t && systemctl reload nginx || echo "Error: Nginx configuration test failed, please check the configuration."
+else
+    echo "👍 SSL certificate directory for $DOMAIN already exists. Skipping SSL certificate acquisition."
+fi
+
+####################################################################################################
+# SQLite DB SETUP
+####################################################################################################
+
+# SQLite database directory and file path
+SQLITE_DIR="/var/lib/hushline"
+SQLITE_DB_FILE="$SQLITE_DIR/hushline.db"
+
+# Ensure SQLite directory exists
+if [ ! -d "$SQLITE_DIR" ]; then
+    echo "Creating SQLite directory at $SQLITE_DIR..."
+    mkdir -p "$SQLITE_DIR"
+    # Ensure the directory is owned by the application user
+    chown $HUSHLINE_USER:$HUSHLINE_GROUP "$SQLITE_DIR"
+    echo "✅ SQLite directory created."
+else
+    echo "👍 SQLite directory already exists."
+fi
+
+####################################################################################################
+
+# UPGRADE DB
+
+# This section ensures the database schema is up to date for Hush Line. It checks for the existence 
+# of a "migrations" directory to determine if database migrations need to be initialized with 
+# Flask-Migrate. If the migrations are already set up, the script proceeds to apply any pending 
+# migrations using Flask's db upgrade command, effectively upgrading the database schema to the 
+# latest version required by Hush Line.
+
+####################################################################################################
+
+# Check if the migrations folder does not exist
+if [ ! -d "migrations" ]; then
+    echo "Initializing database migrations..."
+    poetry run flask db init
+    echo "✅ Database migrations initialized..."
+else
+    echo "👍 Migrations already initialized."
+fi
+
+sleep 5
+
+# Upgrade DB
+export FLASK_APP=hushline:create_app
+poetry run flask db migrate
+poetry run flask db upgrade
+
+####################################################################################################
+
+# REDIS STUFF
+
+# Here, the script sets up Redis, a key-value store that Hush Line uses for caching and session 
+# management, among other things. It checks if the Redis server is running and starts it if not, 
+# also ensuring that it's enabled to start automatically on system boot. 
+
+####################################################################################################
+
+if ! systemctl is-active --quiet redis-server; then
+    echo "Redis server is not running. Starting Redis server..."
+    systemctl start redis-server
+    systemctl enable redis-server
+    echo "✅ Redis server started and enabled to start at boot."
+else
+    echo "🏃‍➡️ Redis server is already running."
+fi
+
+####################################################################################################
+
+# SERVICE FILE
+
+# This section deals with setting up a systemd service file for Hush Line, ensuring it starts 
+# automatically at boot and can be managed with standard systemd commands like start, stop, and 
+# restart. It updates the service file with the environment variable for the encryption key from the 
+# .env file, if it's not already set. This setup allows Hush Line to run as a background service, 
+# providing stability and ease of management.
+
+####################################################################################################
+
+SERVICE_FILE="/etc/systemd/system/hushline.service"
+ENCRYPTION_KEY=$(grep 'ENCRYPTION_KEY=' .env | awk -F"ENCRYPTION_KEY=" '{print $2}')
+
+# Check if ENCRYPTION_KEY is already set in the service file, if not, add it after the last Environment= line
+if ! grep -q 'Environment="ENCRYPTION_KEY=' "${SERVICE_FILE}"; then
+    echo 'Updating encryption key in the service file...'
+    cp files/hushline.service /etc/systemd/system/hushline.service
+    sed -i "/Environment=/a Environment=\"ENCRYPTION_KEY=${ENCRYPTION_KEY}\"" "${SERVICE_FILE}"
+fi
+
+####################################################################################################
+
+# UNATTENDED UPGRADES
+
+# This segment ensures that the system automatically installs security updates without manual 
+# intervention. It configures unattended-upgrades by copying predefined configuration files that 
+# specify which package categories should be automatically updated. This setup minimizes 
+# vulnerabilities by ensuring timely application of security patches, maintaining system security 
+# and stability over time.
+
+####################################################################################################
+
+# Unattended Upgrades
 echo "Configuring unattended-upgrades..."
-cp assets/50unattended-upgrades /etc/apt/apt.conf.d
-cp assets/20auto-upgrades /etc/apt/apt.conf.d
+cp files/50unattended-upgrades /etc/apt/apt.conf.d/
+cp files/20auto-upgrades /etc/apt/apt.conf.d/
 
-systemctl restart unattended-upgrades
+####################################################################################################
 
-echo "✅ Automatic updates have been installed and configured."
+# PERMISSIONS AND SERVICES
 
-# Configure Fail2Ban
+# In the final section, the script secures the Hush Line installation by setting appropriate file 
+# permissions and ensuring all related services, such as Nginx and Redis, are correctly configured 
+# and restarted. It meticulously adjusts ownership and permissions within the Hush Line directory 
+# for security, updates the global Git configuration to include the Hush Line repository safely, and 
+# ensures the systemd service for Hush Line is enabled and started, facilitating automatic startup 
+# at boot.
 
-echo "Configuring fail2ban..."
+####################################################################################################
 
-systemctl start fail2ban
-systemctl enable fail2ban
-cp /etc/fail2ban/jail.{conf,local}
+# Git Permissions
+chown -R $(whoami):$(whoami) /var/www/html/hushline
+chmod -R 755 /var/www/html/hushline
 
-# Configure fail2ban
-cp assets/jail.local /etc/fail2ban
+# Ensuring the correct ownership and permissions for the application directory
+echo "Setting correct permissions for the application directory..."
+find /var/www/html/hushline -type d -exec chmod 750 {} \;
+find /var/www/html/hushline -type f -exec chmod 640 {} \;
 
-systemctl restart fail2ban
+# Ensuring virtual environment binaries are executable
+echo "Ensuring virtual environment binaries are executable..."
+chmod +x /var/www/html/hushline/venv/bin/*
+chown -R $HUSHLINE_USER:$HUSHLINE_GROUP /var/www/html/hushline
 
-echo "✅ Fail2Ban configuration complete."
+# Update the global Git configuration
+git config --global --add safe.directory /var/www/html/hushline
 
-# Configure UFW (Uncomplicated Firewall)
-
-echo "Configuring UFW..."
-
-# Default rules
-ufw default deny incoming
-ufw default allow outgoing
-ufw allow 80/tcp
-ufw allow 443/tcp
-
-# Allow SSH (modify as per your requirements)
-ufw allow ssh
-ufw limit ssh/tcp
-
-# Enable UFW non-interactively
-echo "y" | ufw enable
-
-echo "✅ UFW configuration complete."
-
-# Remove unused packages
-apt -y autoremove
-
-# Generate Codes
-chmod +x generate_codes.sh
-./generate_codes.sh
-
-# Update Tor permissions
-# Create a systemd override directory for the Tor service
-mkdir -p /etc/systemd/system/tor@default.service.d
-
-# Create an override file with an ExecStartPost command and restart on failure for the Tor service
-cat <<EOT > /etc/systemd/system/tor@default.service.d/override.conf
-[Service]
-Restart=on-failure
-RestartSec=5s
-ExecStartPost=/bin/sh -c 'until [ -S /var/www/html/$DOMAIN/hushline-hosted.sock ]; do sleep 1; done; chown debian-tor:www-data /var/www/html/$DOMAIN/hushline-hosted.sock'
-EOT
-
-# Reload the systemd daemon to apply the override
+# Restart and enable related services, including Gunicorn, ensuring they use the updated permissions
+echo "Restarting and enabling services..."
 systemctl daemon-reload
+systemctl restart nginx
+systemctl enable hushline.service
+systemctl restart hushline.service
 
-
-echo "
-✅ Hush Line installation complete! Access your site at these addresses:
-                                               
-https://$DOMAIN
-https://$SAUTEED_ONION_ADDRESS.$DOMAIN;
-http://$ONION_ADDRESS
-"
-
+# Reboot the system
+echo "✅ Installation and configuration completed successfully."
 echo "⏲️ Rebooting in 10 seconds..."
 sleep 10
 reboot
