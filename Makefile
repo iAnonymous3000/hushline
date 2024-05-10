@@ -1,5 +1,4 @@
 .DEFAULT_GOAL := help
-FLASK_APP = hushline/__init__.py
 
 .PHONY: help
 help: ## Print the help message
@@ -9,14 +8,15 @@ help: ## Print the help message
 
 .PHONY: run
 run: ## Run the app
-	FLASK_APP=$(FLASK_APP) flask run --debug -h localhost -p 5000
+	@source ./files/dev/env.sh && \
+	flask run --debug -h localhost -p 5000
 
 .PHONY: lint
 lint: ## Lint the code
 	isort --check . && \
 		black --check . && \
-		flake8 . && \
-		mypy .
+		flake8 --config setup.cfg . && \
+		mypy --config-file pyproject.toml .
 
 .PHONY: fmt
 fmt: ## Format the code
@@ -25,8 +25,12 @@ fmt: ## Format the code
 
 .PHONY: init-db
 init-db: ## Initialize the dev database
-	FLASK_APP=$(FLASK_APP) flask db-extras init-db
+	flask db-extras init-db
 
 .PHONY: test
 test: ## Run the test suite
-	pytest -vv tests
+	@if [ -n "$$BASH_VERSION" ]; then \
+		source ./files/dev/env.sh && pytest -vv tests -p no:warnings; \
+	else \
+		. ./files/dev/env.sh; pytest -vv tests -p no:warnings; \
+	fi

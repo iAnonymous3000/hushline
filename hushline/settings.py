@@ -16,12 +16,13 @@ from flask import (
     url_for,
 )
 from flask_wtf import FlaskForm
-from wtforms import IntegerField, PasswordField, StringField, TextAreaField
+from passlib.hash import scrypt
+from wtforms import BooleanField, IntegerField, PasswordField, StringField, TextAreaField
 from wtforms.validators import DataRequired, Length
 
 from .crypto import is_valid_pgp_key
 from .db import db
-from .ext import bcrypt, limiter
+from .ext import limiter
 from .forms import ComplexPassword, TwoFactorForm
 from .model import Message, SecondaryUsername, User
 from .utils import require_2fa
@@ -51,11 +52,23 @@ class SMTPSettingsForm(FlaskForm):
 
 
 class PGPKeyForm(FlaskForm):
-    pgp_key = TextAreaField("PGP Key", validators=[Length(max=20000)])
+    pgp_key = TextAreaField("PGP Key", validators=[Length(max=100000)])
 
 
 class DisplayNameForm(FlaskForm):
     display_name = StringField("Display Name", validators=[Length(max=100)])
+
+
+class DirectoryVisibilityForm(FlaskForm):
+    show_in_directory = BooleanField("Show on public directory")
+
+
+class ProfileForm(FlaskForm):
+    bio = TextAreaField(
+        "Bio",
+        validators=[Length(max=250)],
+        render_kw={"placeholder": "Write something about yourself up to 250 characters."},
+    )
 
 
 def create_blueprint() -> Blueprint:
@@ -74,15 +87,33 @@ def create_blueprint() -> Blueprint:
             flash("🫥 User not found.")
             return redirect(url_for("login"))
 
-        # Fetch all secondary usernames for the current user
+        directory_visibility_form = DirectoryVisibilityForm(
+            show_in_directory=user.show_in_directory
+        )
         secondary_usernames = SecondaryUsername.query.filter_by(user_id=user.id).all()
-
-        # Initialize forms
         change_password_form = ChangePasswordForm()
         change_username_form = ChangeUsernameForm()
         smtp_settings_form = SMTPSettingsForm()
         pgp_key_form = PGPKeyForm()
         display_name_form = DisplayNameForm()
+        directory_visibility_form = DirectoryVisibilityForm()
+
+        if request.method == "POST":
+            if "update_bio" in request.form:  # Check if the bio update form was submitted
+                user.bio = request.form["bio"]
+                db.session.commit()
+                flash("👍 Bio updated successfully.")
+                return redirect(url_for("settings.index"))
+
+        if request.method == "POST":
+            if (
+                directory_visibility_form.validate_on_submit()
+                and "update_directory_visibility" in request.form
+            ):
+                user.show_in_directory = directory_visibility_form.show_in_directory.data
+                db.session.commit()
+                flash("👍 Directory visibility updated successfully.")
+                return redirect(url_for("settings.index"))
 
         # Additional admin-specific data initialization
         user_count = two_fa_count = pgp_key_count = two_fa_percentage = pgp_key_percentage = None
@@ -149,12 +180,9 @@ def create_blueprint() -> Blueprint:
 
             # Handle Change Password Form Submission
             elif change_password_form.validate_on_submit():
-                if bcrypt.check_password_hash(
-                    user.password_hash, change_password_form.old_password.data
-                ):
-                    user.password_hash = bcrypt.generate_password_hash(
-                        change_password_form.new_password.data
-                    ).decode("utf-8")
+                if scrypt.verify(change_password_form.old_password.data, user.password_hash):
+                    # Hash the new password using scrypt and update the user object
+                    user.password_hash = scrypt.hash(change_password_form.new_password.data)
                     db.session.commit()
                     flash("👍 Password changed successfully.")
                 else:
@@ -172,9 +200,9 @@ def create_blueprint() -> Blueprint:
                 two_fa_percentage = (two_fa_count / user_count * 100) if user_count else 0
                 pgp_key_percentage = (pgp_key_count / user_count * 100) if user_count else 0
             else:
-                user_count = (
-                    two_fa_count
-                ) = pgp_key_count = two_fa_percentage = pgp_key_percentage = None
+                user_count = two_fa_count = pgp_key_count = two_fa_percentage = (
+                    pgp_key_percentage
+                ) = None
 
         # Prepopulate form fields
         smtp_settings_form.smtp_server.data = user.smtp_server
@@ -182,6 +210,7 @@ def create_blueprint() -> Blueprint:
         smtp_settings_form.smtp_username.data = user.smtp_username
         pgp_key_form.pgp_key.data = user.pgp_key
         display_name_form.display_name.data = user.display_name or user.primary_username
+        directory_visibility_form.show_in_directory.data = user.show_in_directory
 
         return render_template(
             "settings.html",
@@ -201,6 +230,7 @@ def create_blueprint() -> Blueprint:
             pgp_key_count=pgp_key_count,
             two_fa_percentage=two_fa_percentage,
             pgp_key_percentage=pgp_key_percentage,
+            directory_visibility_form=directory_visibility_form,
         )
 
     @bp.route("/toggle-2fa", methods=["POST"])
@@ -222,40 +252,40 @@ def create_blueprint() -> Blueprint:
     def change_password() -> str | Response:
         user_id = session.get("user_id")
         if not user_id:
+            flash("Session expired, please log in again.", "info")
             return redirect(url_for("login"))
 
         user = User.query.get(user_id)
+        if not user:
+            flash("User not found.", "error")
+            return redirect(url_for("login"))
+
         change_password_form = ChangePasswordForm(request.form)
-        change_username_form = ChangeUsernameForm()
-        smtp_settings_form = SMTPSettingsForm()
-        pgp_key_form = PGPKeyForm()
-        display_name_form = DisplayNameForm()
-
         if change_password_form.validate_on_submit():
-            old_password = change_password_form.old_password.data
-            new_password = change_password_form.new_password.data
-
-            if bcrypt.check_password_hash(user.password_hash, old_password):
-                user.password_hash = bcrypt.generate_password_hash(new_password).decode("utf-8")
+            # Verify the old password
+            if user.check_password(change_password_form.old_password.data):
+                # Set the new password
+                user.password_hash = change_password_form.new_password.data
                 db.session.commit()
                 session.clear()  # Clears the session, logging the user out
                 flash(
-                    "👍 Password successfully changed. Please log in with your new password.",
+                    "👍 Password successfully changed. Please log in again.",
                     "success",
                 )
                 return redirect(
                     url_for("login")
                 )  # Redirect to the login page for re-authentication
             else:
-                flash("⛔️ Incorrect old password.")
+                flash("Incorrect old password.", "error")
 
+        # Render the settings page with all forms
         return render_template(
             "settings.html",
             change_password_form=change_password_form,
-            change_username_form=change_username_form,
-            smtp_settings_form=smtp_settings_form,
-            pgp_key_form=pgp_key_form,
-            display_name_form=display_name_form,
+            change_username_form=ChangeUsernameForm(),
+            smtp_settings_form=SMTPSettingsForm(),
+            pgp_key_form=PGPKeyForm(),
+            display_name_form=DisplayNameForm(),
             user=user,
         )
 
@@ -443,7 +473,7 @@ def create_blueprint() -> Blueprint:
             else:
                 # If the PGP key is invalid
                 flash("⛔️ Invalid PGP key format or import failed.")
-                return redirect(url_for("settings"))
+                return redirect(url_for(".index"))
 
             db.session.commit()
             flash("👍 PGP key updated successfully.")

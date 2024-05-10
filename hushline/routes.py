@@ -1,22 +1,40 @@
 import logging
 import os
+import re
 from datetime import datetime
 
 import pyotp
-from flask import Flask, Response, flash, redirect, render_template, request, session, url_for
+from flask import (
+    Flask,
+    Response,
+    flash,
+    jsonify,
+    redirect,
+    render_template,
+    request,
+    session,
+    url_for,
+)
 from flask_wtf import FlaskForm
 from wtforms import PasswordField, StringField, TextAreaField
-from wtforms.validators import DataRequired, Length
+from wtforms.validators import DataRequired, Length, ValidationError
 
 from .crypto import encrypt_message
 from .db import db
-from .ext import bcrypt, limiter
+from .ext import limiter
 from .forms import ComplexPassword
-from .model import InviteCode, Message, SecondaryUsername, User
+from .model import InviteCode, Message, User
 from .utils import require_2fa, send_email
 
 # Logging setup
 logging.basicConfig(level=logging.INFO, format="%(asctime)s:%(levelname)s:%(message)s")
+
+
+def valid_username(form, field):
+    if not re.match(r"^[a-zA-Z0-9_-]+$", field.data):
+        raise ValidationError(
+            "Username must contain only letters, numbers, underscores, or hyphens."
+        )
 
 
 class TwoFactorForm(FlaskForm):
@@ -32,7 +50,9 @@ class MessageForm(FlaskForm):
 
 
 class RegistrationForm(FlaskForm):
-    username = StringField("Username", validators=[DataRequired(), Length(min=4, max=25)])
+    username = StringField(
+        "Username", validators=[DataRequired(), Length(min=4, max=25), valid_username]
+    )
     password = PasswordField(
         "Password",
         validators=[
@@ -58,12 +78,11 @@ def init_app(app: Flask) -> None:
             if user:
                 return redirect(url_for("inbox", username=user.primary_username))
             else:
-                # Handle case where user ID in session does not exist in the database
                 flash("🫥 User not found. Please log in again.")
                 session.pop("user_id", None)  # Clear the invalid user_id from session
                 return redirect(url_for("login"))
         else:
-            return redirect(url_for("login"))
+            return redirect(url_for("directory"))
 
     @app.route("/inbox")
     @limiter.limit("120 per minute")
@@ -99,31 +118,30 @@ def init_app(app: Flask) -> None:
     @app.route("/submit_message/<username>", methods=["GET", "POST"])
     @limiter.limit("120 per minute")
     def submit_message(username: str) -> Response | str:
+        # Initialize the form
         form = MessageForm()
-        user = None
-        secondary_username = None
-        display_name_or_username = ""
 
-        primary_user = User.query.filter_by(primary_username=username).first()
-        if primary_user:
-            user = primary_user
-            display_name_or_username = primary_user.display_name or primary_user.primary_username
-        else:
-            secondary_username = SecondaryUsername.query.filter_by(username=username).first()
-            if secondary_username:
-                user = secondary_username.primary_user
-                display_name_or_username = (
-                    secondary_username.display_name or secondary_username.username
-                )
-
+        # Retrieve the user details
+        user = User.query.filter_by(primary_username=username).first()
         if not user:
             flash("🫥 User not found.")
             return redirect(url_for("index"))
 
+        # Decide the display name or username
+        display_name_or_username = user.display_name or user.primary_username
+
+        # Check if there is a prefill content
+        prefill_content = request.args.get("prefill", "")
+        if prefill_content:
+            # Pre-fill the form with the content if provided
+            form.content.data = prefill_content
+
+        # Process form submission
         if form.validate_on_submit():
             content = form.content.data
             client_side_encrypted = request.form.get("client_side_encrypted", "false") == "true"
 
+            # Handle encryption if necessary
             if not client_side_encrypted and user.pgp_key:
                 encrypted_content = encrypt_message(content, user.pgp_key)
                 email_content = encrypted_content if encrypted_content else content
@@ -133,14 +151,12 @@ def init_app(app: Flask) -> None:
             else:
                 email_content = content
 
-            new_message = Message(
-                content=email_content,
-                user_id=user.id,
-                secondary_user_id=secondary_username.id if secondary_username else None,
-            )
+            # Save the new message
+            new_message = Message(content=email_content, user_id=user.id)
             db.session.add(new_message)
             db.session.commit()
 
+            # Attempt to send an email notification
             if (
                 user.email
                 and user.smtp_server
@@ -171,11 +187,11 @@ def init_app(app: Flask) -> None:
 
             return redirect(url_for("submit_message", username=username))
 
+        # Render the form page
         return render_template(
             "submit_message.html",
             form=form,
             user=user,
-            secondary_username=secondary_username if secondary_username else None,
             username=username,
             display_name_or_username=display_name_or_username,
             current_user_id=session.get("user_id"),
@@ -200,20 +216,16 @@ def init_app(app: Flask) -> None:
             db.session.delete(message)
             db.session.commit()
             flash("🗑️ Message deleted successfully.")
+            return redirect(url_for("inbox", username=user.primary_username))
         else:
             flash("⛔️ Message not found or unauthorized access.")
-
-        return redirect(url_for("inbox", username=user.primary_username))
+            return redirect(url_for("inbox", username=user.primary_username))
 
     @app.route("/register", methods=["GET", "POST"])
     @limiter.limit("120 per minute")
     def register() -> Response | str:
-        # TODO this should be a setting pulled from `current_app`
         require_invite_code = os.environ.get("REGISTRATION_CODES_REQUIRED", "True") == "True"
-
         form = RegistrationForm()
-
-        # TODO don't dynamically remove the form field. instead use a custom renderer and validator
         if not require_invite_code:
             del form.invite_code
 
@@ -226,14 +238,25 @@ def init_app(app: Flask) -> None:
                 invite_code = InviteCode.query.filter_by(code=invite_code_input).first()
                 if not invite_code or invite_code.expiration_date < datetime.utcnow():
                     flash("⛔️ Invalid or expired invite code.", "error")
-                    return redirect(url_for("register"))
+                    return (
+                        render_template(
+                            "register.html", form=form, require_invite_code=require_invite_code
+                        ),
+                        400,
+                    )
 
             if User.query.filter_by(primary_username=username).first():
                 flash("💔 Username already taken.", "error")
-                return redirect(url_for("register"))
+                return (
+                    render_template(
+                        "register.html", form=form, require_invite_code=require_invite_code
+                    ),
+                    409,
+                )
 
-            password_hash = bcrypt.generate_password_hash(password).decode("utf-8")
-            new_user = User(primary_username=username, password_hash=password_hash)
+            # Create new user instance
+            new_user = User(primary_username=username)
+            new_user.password_hash = password  # This triggers the password_hash setter
             db.session.add(new_user)
             db.session.commit()
 
@@ -246,14 +269,14 @@ def init_app(app: Flask) -> None:
     @limiter.limit("120 per minute")
     def login() -> Response | str:
         form = LoginForm()
-        if request.method == "POST":  # Ensure we're processing form submissions
+        if request.method == "POST":
             if form.validate_on_submit():
                 username = form.username.data.strip()
                 password = form.password.data
 
                 user = User.query.filter_by(primary_username=username).first()
 
-                if user and bcrypt.check_password_hash(user.password_hash, password):
+                if user and user.check_password(password):
                     session.permanent = True
                     session["user_id"] = user.id
                     session["username"] = user.primary_username
@@ -269,17 +292,14 @@ def init_app(app: Flask) -> None:
                         return redirect(url_for("inbox", username=user.primary_username))
                 else:
                     flash("⛔️ Invalid username or password")
-            else:
-                flash("⛔️ Invalid form data")
-
-        # GET requests will reach this point without triggering the flash messages
         return render_template("login.html", form=form)
 
     @app.route("/verify-2fa-login", methods=["GET", "POST"])
     @limiter.limit("120 per minute")
     def verify_2fa_login() -> Response | str:
-        # Redirect to login if user is not authenticated
+        # Redirect to login if user is not authenticated or 2FA is not required
         if "user_id" not in session or not session.get("2fa_required", False):
+            flash("You need to log in first.")
             return redirect(url_for("login"))
 
         user = User.query.get(session["user_id"])
@@ -298,6 +318,7 @@ def init_app(app: Flask) -> None:
                 return redirect(url_for("inbox", username=user.primary_username))
             else:
                 flash("⛔️ Invalid 2FA code. Please try again.")
+                return render_template("verify_2fa_login.html", form=form), 401
 
         return render_template("verify_2fa_login.html", form=form)
 
@@ -317,3 +338,75 @@ def init_app(app: Flask) -> None:
 
         # Redirect to the login page or home page after logout
         return redirect(url_for("index"))
+
+    @app.route("/settings/update_directory_visibility", methods=["POST"])
+    def update_directory_visibility():
+        if "user_id" in session:
+            user = User.query.get(session["user_id"])
+            user.show_in_directory = "show_in_directory" in request.form
+            db.session.commit()
+            flash("Directory visibility updated.")
+        else:
+            flash("You need to be logged in to update settings.")
+        return redirect(url_for("settings.index"))
+
+    def sort_users_by_display_name(users, admin_first=True):
+        if admin_first:
+            # Sorts admins to the top, then by display name or username
+            return sorted(
+                users,
+                key=lambda u: (
+                    not u.is_admin,
+                    (u.display_name or u.primary_username).strip().lower(),
+                ),
+            )
+        else:
+            # Sorts only by display name or username
+            return sorted(
+                users, key=lambda u: (u.display_name or u.primary_username).strip().lower()
+            )
+
+    @app.route("/directory")
+    def directory():
+        logged_in = "user_id" in session
+        users = User.query.all()  # Fetch all users
+        sorted_users = sort_users_by_display_name(
+            users, admin_first=True
+        )  # Sort users in Python with admins first
+        return render_template("directory.html", users=sorted_users, logged_in=logged_in)
+
+    @app.route("/directory/search")
+    @limiter.limit("500 per minute")
+    def directory_search():
+        query = request.args.get("query", "").strip()
+        tab = request.args.get("tab", "all")
+
+        try:
+            general_filter = User.query.filter(
+                db.or_(
+                    User.primary_username.ilike(f"%{query}%"),
+                    User.display_name.ilike(f"%{query}%"),
+                    User.bio.ilike(f"%{query}%"),
+                )
+            )
+
+            if tab == "verified":
+                users = general_filter.filter(User.is_verified.is_(True)).all()
+            else:
+                users = general_filter.all()
+
+            users_data = [
+                {
+                    "primary_username": user.primary_username,
+                    "display_name": user.display_name or user.primary_username,
+                    "is_verified": user.is_verified,
+                    "is_admin": user.is_admin,  # Ensure this attribute is correctly being sent
+                    "bio": user.bio,
+                }
+                for user in users
+            ]
+
+            return jsonify(users_data)
+        except Exception as e:
+            print(f"Error during search: {e}")
+            return jsonify({"error": "Internal Server Error"}), 500

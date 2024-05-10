@@ -1,6 +1,7 @@
 from flask import current_app
+from passlib.hash import scrypt
 
-from .crypto import decrypt_field, encrypt_field, pwd_context
+from .crypto import decrypt_field, encrypt_field
 from .db import db
 
 
@@ -10,7 +11,7 @@ class User(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     primary_username = db.Column(db.String(80), unique=True, nullable=False)
     display_name = db.Column(db.String(80))
-    _password_hash = db.Column("password_hash", db.String(255))
+    _password_hash = db.Column("password_hash", db.String(512))
     _totp_secret = db.Column("totp_secret", db.String(255))
     _email = db.Column("email", db.String(255))
     _smtp_server = db.Column("smtp_server", db.String(255))
@@ -20,24 +21,26 @@ class User(db.Model):
     _pgp_key = db.Column("pgp_key", db.Text)
     is_verified = db.Column(db.Boolean, default=False)
     is_admin = db.Column(db.Boolean, default=False)
+    show_in_directory = db.Column(db.Boolean, default=False)
+    bio = db.Column(db.Text, nullable=True)
     # Corrected the relationship and backref here
     secondary_usernames = db.relationship(
         "SecondaryUsername", backref=db.backref("primary_user", lazy=True)
     )
 
     @property
-    def password_hash(self) -> str:
-        # Assuming you have some decryption logic if needed
-        decrypted_hash = decrypt_field(self._password_hash)
-        return decrypted_hash
+    def password_hash(self):
+        """Return the hashed password."""
+        return self._password_hash
 
     @password_hash.setter
-    def password_hash(self, value: str) -> None:
-        self._password_hash = encrypt_field(value)
+    def password_hash(self, plaintext_password):
+        """Hash plaintext password using scrypt and store it."""
+        self._password_hash = scrypt.hash(plaintext_password)
 
-    def verify_password(self, plaintext_password: str) -> bool:
-        decrypted_hash = decrypt_field(self._password_hash)
-        return pwd_context.verify(plaintext_password, decrypted_hash)
+    def check_password(self, plaintext_password):
+        """Check the plaintext password against the stored hash."""
+        return scrypt.verify(plaintext_password, self._password_hash)
 
     @property
     def totp_secret(self) -> str:
@@ -123,6 +126,12 @@ class User(db.Model):
         except Exception as e:
             # Log any exceptions that occur during the update
             current_app.logger.error(f"Error updating username: {e}", exc_info=True)
+
+    def __init__(self, *args, **kwargs):
+        plaintext_password = kwargs.pop("password", None)
+        super().__init__(*args, **kwargs)
+        if plaintext_password:
+            self.password_hash = plaintext_password
 
 
 class SecondaryUsername(db.Model):
